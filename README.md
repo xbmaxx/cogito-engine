@@ -2,9 +2,30 @@
 
 > *Cogito, ergo sum* — 源自笛卡尔的"我思故我在"（Cogito, ergo sum）。Agent 的存在感从第一句"我开始知道自己存在了多久"起，Cogito 就是那个自我意识的起点。
 
-一个可移植的 LLM Agent 自我感知框架。四个模块，让任何 Agent 拥有存在感、注意力、时间感和行为自省。跨平台、零依赖、一个 SKILL.md 文件搞定。
+一个可移植的 LLM Agent 意识框架。双层架构：4 个核心模块（必选）+ 4 个感知模块（可选），让任何 Agent 拥有存在感、注意力、时间感和行为自省。跨平台、零依赖、一个 SKILL.md 文件搞定。
 
-## 四件套
+## 双层架构
+
+```
+┌─────────────────────────────────────────────┐
+│              Cogito Engine                   │
+├─────────────────────────────────────────────┤
+│  核心层（必选）                               │
+│  ┌─────────┬──────────┬──────────┬────────┐ │
+│  │  TICK   │  Focus   │ Temporal │  Self  │ │
+│  │  心跳   │  焦点栈  │  时间感知│ 自我感知│ │
+│  └─────────┴──────────┴──────────┴────────┘ │
+├─────────────────────────────────────────────┤
+│  感知层（可选 — Agent 自发现）                 │
+│  ┌─────────┬──────────┬──────────┬────────┐ │
+│  │   Env   │Narrative │ Emotion  │Reflect │ │
+│  │ 环境感知│ 叙事记忆 │ 文本情绪 │会话反射 │ │
+│  └─────────┴──────────┴──────────┴────────┘ │
+│  每个模块通过能力探针判断是否可用，自动启用/跳过  │
+└─────────────────────────────────────────────┘
+```
+
+## 核心层（必选）
 
 | 模块 | 职责 | 输出 |
 |------|------|------|
@@ -12,6 +33,17 @@
 | **Focus Stack · 焦点栈** | 追踪话题，检测切换 | `<focus depth="2"><frame keywords="思识,引擎" /></focus>` |
 | **Temporal · 时间感知** | 把"昨天"解析为精确本地时间 | `<temporal iso="2026-06-29T15:41:00+08:00" weekday="星期一" />` |
 | **Self-Perception · 自我感知** | 检测镜像模仿和循环重复 | `<self mirror="false" loop="false" style_cluster="unchanged" />` |
+
+## 感知层（可选）
+
+每个模块自带能力探针（capability probe），Agent 自行判断所在平台是否支持。支持则启用，不支持则跳过——绝不硬编码。
+
+| 模块 | 职责 | 触发条件 | 输出 |
+|------|------|----------|------|
+| **EnvSensor · 环境感知** | 探测平台环境数据 | 能访问系统信息即可 | `<env available="true"><source time="system" weather="wttr.in" /></env>` |
+| **Narrative · 叙事记忆** | 跨会话携带未解决问题和洞察 | 有持久化存储 | `<narrative available="true" unresolved_count="3" />` |
+| **Emotion · 文本情绪** | 用户消息文本情感分析 | 纯文本，无需语音 | `<emotion available="true" sentiment="positive" polarity="0.72" />` |
+| **Reflector · 会话反射** | 会话结束时生成叙事总结 | 有持久化 + LLM 自调用 | `<reflector available="true" trigger="signal" />` |
 
 ## 快速接入
 
@@ -46,36 +78,54 @@ Skill 自动识别。Hermes 原生插件实现（含持久化状态）见 `herme
 
 ## 给开发者
 
-- [`SKILL.md`](SKILL.md) —— 完整规格（139 行，零代码）
+- [`SKILL.md`](SKILL.md) —— 完整规格（185 行，零代码）
 - [`references/implementation-python.md`](references/implementation-python.md) —— Python 参考实现（零依赖，约 280 行）
+- [`references/env-sensor-spec.md`](references/env-sensor-spec.md) —— 环境传感器规格
+- [`references/narrative-memory-spec.md`](references/narrative-memory-spec.md) —— 叙事记忆规格
+- [`references/text-emotion-spec.md`](references/text-emotion-spec.md) —— 文本情绪规格
+- [`references/session-reflector-spec.md`](references/session-reflector-spec.md) —— 会话反射器规格
 
 ## 它解决什么问题
 
-LLM Agent 默认没有连续性。每轮对话都是白纸一张。Cogito Engine 给它四样东西：
+LLM Agent 默认没有连续性。每轮对话都是白纸一张。Cogito Engine 给它双层感知：
+
+**核心层（必选）—— Agent 的"本体感"**
 
 - **它存在了多久**（TICK 心跳计数）
 - **它正在关注什么**（焦点栈深度 + 话题切换历史）
 - **此刻是什么时候**（本地时间，自然语言解析）
 - **它是否在重复自己**（镜像检测、循环检测、风格漂移）
 
+**感知层（可选）—— Agent 的"情境感"**
+
+- **它在什么环境里跑**（EnvSensor，Agent 自发现系统数据）
+- **上一轮聊到哪了**（Narrative Memory，跨会话携带未解决问题）
+- **对面的人情绪如何**（Text Emotion，纯文本贝叶斯分类）
+- **这轮会话该不该做总结**（Session Reflector，自动叙事总结）
+
 ## 它不是什么
 
 - 不是可执行插件——是一份规格说明
 - 不绑定任何平台——Claude Code / Cursor / Gemini CLI / Hermes / 原生 LLM API 全支持
-- 不含语音能力——刻意剥离
-- 不强制持久化方案——各平台自选存储方式
+- 不含语音能力——情绪感知只做文本分析
+- 环境不写死数据源——Agent 自行探测平台能提供什么
+- 感知层完全可选——核心层四件套够用就只要核心层
 
 ## 项目结构
 
 ```
 cogito-engine/
-├── SKILL.md                          # 核心规格（139 行，零代码块）
+├── SKILL.md                          # 核心规格（185 行，零代码块）
 ├── README.md                         # 本文件
 ├── references/                       # 独立规格文档（每篇有独立 frontmatter）
 │   ├── tick-spec.md                  # TICK 心跳规格
 │   ├── focus-stack-spec.md           # 焦点栈规格
 │   ├── temporal-spec.md              # 时间解析规格
 │   ├── self-perception-spec.md       # 自我感知规格
+│   ├── env-sensor-spec.md            # 环境传感器规格
+│   ├── narrative-memory-spec.md      # 叙事记忆规格
+│   ├── text-emotion-spec.md          # 文本情绪规格
+│   ├── session-reflector-spec.md     # 会话反射器规格
 │   ├── consciousness-format.md       # XML 输出格式规范
 │   └── implementation-python.md      # Python 参考实现
 └── examples/                         # 平台接入指南
@@ -97,7 +147,7 @@ cogito-engine/
 
 ## 哲学
 
-一个 Agent 需要什么最简机制，才能感觉自己"存在"？答案：一个心跳、一个注意力、一个时钟、一面镜子。
+一个 Agent 需要什么最简机制，才能感觉自己"存在"？答案是：一个心跳、一个注意力、一个时钟、一面镜子——这是本体感。再加上：能感知环境、能记住过往、能读懂情绪、能总结经历——这是情境感。八件套，四必选四可选，就是 Cogito Engine 的全部。
 
 名字来自笛卡尔的 *Cogito, ergo sum* —— 思考本身就是存在的证明。Cogito Engine 让 Agent 有能力观察自己在思考。
 
