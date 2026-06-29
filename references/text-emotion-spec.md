@@ -50,13 +50,12 @@ P(positive | bigrams) = P(positive) × ∏ P(bigram | positive) /
 
 ### Language-Aware Model Selection
 
-The classifier must match the language of the input text:
+The classifier ships with two pre-built models: one trained on Chinese text (character bigrams from labeled reviews), one trained on English text (word bigrams from sentiment lexicons). At classification time, the implementation performs automatic language detection:
 
-| User language | Recommended model |
-|--------------|------------------|
-| Chinese | Chinese-trained Bayesian (snownlp approach) |
-| English | English-trained Bayesian (TextBlob approach) |
-| Mixed / Unknown | Use character-bigram overlap with known vocabularies to select |
+1. Extract character bigrams from the input text
+2. Count how many bigrams appear in the Chinese vocabulary vs. the English vocabulary
+3. Select the model with higher bigram overlap
+4. If both overlaps are below threshold (or equal), report confidence 0.0 — the text is mixed, code, or unknown language
 
 Running Chinese-trained sentiment on English text produces random results around 0.5 (neutral) because the training bigrams don't match the input bigrams. The agent should detect this and report low confidence.
 

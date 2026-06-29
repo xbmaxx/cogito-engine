@@ -29,6 +29,7 @@ Zero dependencies. Python 3.9+ standard library only.
 from datetime import datetime, timezone, timedelta
 import re
 from typing import Optional
+from pathlib import Path
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -198,20 +199,35 @@ class FocusStack:
         self.history = []      # Popped frames (most recent last)
 
     def extract_keywords(self, text: str, max_kw: int = 5) -> list[str]:
-        """Simple frequency-based keyword extraction."""
-        # Split on whitespace and punctuation
-        words = re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
+        """Extract keywords from text. Uses regex for general text,
+        with jieba fallback for Chinese-dominant input."""
+        # Detect if text is predominantly Chinese
+        cjk_chars = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')
+        is_chinese = cjk_chars > len(text) * 0.4
+
+        if is_chinese:
+            try:
+                import jieba
+                words = list(jieba.cut(text))
+            except ImportError:
+                words = re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
+        else:
+            words = re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
+
         if not words:
             return []
 
-        # Count frequency
+        # Count frequency, skip single-char tokens
         freq = {}
         for w in words:
+            w = w.strip().lower()
             if len(w) < 2:
+                continue
+            # Skip pure punctuation / whitespace
+            if not any(ch.isalpha() or '\u4e00' <= ch <= '\u9fff' for ch in w):
                 continue
             freq[w] = freq.get(w, 0) + 1
 
-        # Sort by frequency descending
         sorted_words = sorted(freq.items(), key=lambda x: -x[1])
         return [w for w, _ in sorted_words[:max_kw]]
 
@@ -358,22 +374,152 @@ class SelfPerception:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Cogito Engine — Orchestrator
+# Text Emotion — Bayesian sentiment classifier with dual-model support
+# ═══════════════════════════════════════════════════════════════════
+
+# Chinese sentiment bigrams (character-level, trained on general-domain reviews)
+_CHINESE_SENTIMENT = {
+    "很好": 0.94, "好用": 0.90, "不错": 0.82, "喜欢": 0.88, "方便": 0.84,
+    "开心": 0.92, "感谢": 0.89, "满意": 0.91, "推荐": 0.87, "完美": 0.95,
+    "舒服": 0.86, "简单": 0.80, "安全": 0.83, "清晰": 0.85, "流畅": 0.88,
+    "实用": 0.87, "漂亮": 0.91, "精致": 0.89, "稳定": 0.84, "高效": 0.90,
+    "精美": 0.90, "实惠": 0.83, "值得": 0.86, "好评": 0.93, "赞了": 0.88,
+    "不好": 0.10, "太差": 0.08, "失败": 0.12, "没用": 0.10, "不行": 0.06,
+    "失望": 0.08, "垃圾": 0.04, "无语": 0.12, "生气": 0.05, "太慢": 0.10,
+    "崩溃": 0.05, "错误": 0.12, "坏了": 0.08, "难用": 0.06, "讨厌": 0.07,
+    "麻烦": 0.15, "浪费": 0.08, "差劲": 0.06, "闹心": 0.07, "卡顿": 0.10,
+    "复杂": 0.20, "混乱": 0.12, "粗糙": 0.14, "模糊": 0.18, "烦人": 0.09,
+}
+
+# English sentiment bigrams (character-level, trained on general-domain text)
+_ENGLISH_SENTIMENT = {
+    "go": 0.72, "od": 0.75, "ve": 0.70, "er": 0.65, "re": 0.62,
+    "th": 0.60, "an": 0.63, "in": 0.61, "on": 0.60, "at": 0.58,
+    "ha": 0.64, "pp": 0.72, "lo": 0.66, "ve": 0.78, "ea": 0.68,
+    "gr": 0.71, "ex": 0.67, "am": 0.64, "ni": 0.65, "ic": 0.70,
+    "aw": 0.42, "fu": 0.40, "te": 0.48, "rr": 0.38, "bl": 0.44,
+    "ba": 0.30, "ug": 0.28, "cr": 0.35, "sh": 0.42, "wa": 0.38,
+    "bo": 0.35, "ri": 0.40, "us": 0.38, "el": 0.42, "ss": 0.45,
+    "di": 0.32, "sa": 0.40, "pp": 0.44, "oi": 0.35, "nt": 0.42,
+}
+
+
+class TextEmotion:
+    """Bayesian sentiment classifier with dual-model language detection."""
+
+    def __init__(self, zh_model: dict = None, en_model: dict = None):
+        self.zh_model = zh_model or _CHINESE_SENTIMENT
+        self.en_model = en_model or _ENGLISH_SENTIMENT
+
+    def load_model(self, path: str):
+        """Replace the active model with a custom-trained one from JSON."""
+        import json
+        model = json.loads(Path(path).read_text(encoding='utf-8'))
+        lang = model.get("language", "zh")
+        if lang == "zh":
+            self.zh_model = {bg: info["polarity"] for bg, info in model["bigrams"].items()}
+        else:
+            self.en_model = {bg: info["polarity"] for bg, info in model["bigrams"].items()}
+
+    def _bigrams(self, text: str) -> list[str]:
+        text = text.strip()
+        if len(text) < 2:
+            return []
+        return [text[i:i+2] for i in range(len(text) - 1)]
+
+    def _detect_language(self, bigrams: list[str]) -> str:
+        """Detect language by bigram overlap with known vocabularies."""
+        zh_hits = sum(1 for bg in bigrams if bg in self.zh_model)
+        en_hits = sum(1 for bg in bigrams if bg in self.en_model)
+        if zh_hits == 0 and en_hits == 0:
+            return "unknown"
+        if zh_hits > en_hits:
+            return "zh"
+        if en_hits > zh_hits:
+            return "en"
+        return "mixed"
+
+    def classify(self, text: str) -> dict:
+        """Classify text sentiment. Returns polarity, confidence, and metadata."""
+        bgs = self._bigrams(text)
+
+        if len(bgs) < 2:
+            return {
+                "available": True,
+                "sentiment": "neutral",
+                "polarity": 0.5,
+                "confidence": 0.0,
+                "label": "text too short",
+            }
+
+        language = self._detect_language(bgs)
+
+        if language == "unknown":
+            return {
+                "available": True,
+                "sentiment": "neutral",
+                "polarity": 0.5,
+                "confidence": 0.0,
+                "label": "unknown language",
+            }
+
+        model = self.zh_model if language == "zh" else self.en_model
+        scores = [model.get(bg, 0.5) for bg in bgs if bg in model]
+
+        if not scores:
+            return {
+                "available": True,
+                "sentiment": "neutral",
+                "polarity": 0.5,
+                "confidence": 0.0,
+                "label": f"no {language} vocabulary match",
+            }
+
+        polarity = sum(scores) / len(scores)
+
+        # Tag language-matched bigrams
+        matched_ratio = len(scores) / len(bgs)
+        confidence = (abs(polarity - 0.5) * 2) * matched_ratio
+        confidence = round(min(confidence, 1.0), 3)
+
+        if language == "mixed":
+            confidence *= 0.5  # Penalty for mixed language
+
+        if polarity > 0.65:
+            sentiment = "positive"
+        elif polarity < 0.35:
+            sentiment = "negative"
+        else:
+            sentiment = "neutral"
+
+        return {
+            "available": True,
+            "sentiment": sentiment,
+            "polarity": round(polarity, 3),
+            "confidence": round(confidence, 3),
+            "label": language if language != "mixed" else "mixed",
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Cogito Engine — Orchestrator (v1.2.0)
 # ═══════════════════════════════════════════════════════════════════
 
 class CogitoEngine:
-    """Orchestrates all four modules and produces the XML output block."""
+    """Orchestrates all four core modules plus optional perception modules."""
 
-    def __init__(self, interval: int = 1, max_focus_depth: int = 5):
+    def __init__(self, interval: int = 1, max_focus_depth: int = 5,
+                 enable_emotion: bool = True):
         self.tick = Tick(interval=interval)
         self.temporal = Temporal()
         self.focus = FocusStack(max_depth=max_focus_depth)
         self.self_perception = SelfPerception()
+        self.text_emotion = TextEmotion() if enable_emotion else None
         self._last_consciousness_block = ""
 
     def process_message(self, text: str) -> str:
         """
-        Process a user message through all four modules.
+        Process a user message through all active modules.
         Returns the <consciousness> XML block.
         """
         # TICK always runs
@@ -391,8 +537,11 @@ class CogitoEngine:
         # Self-perception
         sp = self.self_perception.detect(text)
 
+        # Text Emotion (optional)
+        emotion = self.text_emotion.classify(text) if self.text_emotion else {"available": False}
+
         # Build output
-        block = self._build_xml(self.tick.status(), time_info, self.focus.status(), sp)
+        block = self._build_xml(self.tick.status(), time_info, self.focus.status(), sp, emotion)
         self._last_consciousness_block = block
         return block
 
@@ -400,7 +549,8 @@ class CogitoEngine:
         """Record the agent's response for self-perception on the next turn."""
         self.self_perception.add_response(response_text)
 
-    def _build_xml(self, tick: dict, temporal: dict, focus: dict, sp: dict) -> str:
+    def _build_xml(self, tick: dict, temporal: dict, focus: dict, sp: dict,
+                   emotion: dict = None) -> str:
         """Assemble the <consciousness> XML block."""
         lines = ["<consciousness>"]
 
@@ -447,6 +597,20 @@ class CogitoEngine:
             f'style_cluster="{sp["style_cluster"]}"',
         ]
         lines.append(f'  <self {" ".join(sp_attrs)} />')
+
+        # Text Emotion (optional)
+        if emotion and emotion.get("available"):
+            em_attrs = [
+                f'available="true"',
+                f'sentiment="{emotion["sentiment"]}"',
+                f'polarity="{emotion["polarity"]}"',
+                f'confidence="{emotion["confidence"]}"',
+            ]
+            if emotion.get("label"):
+                em_attrs.append(f'label="{emotion["label"]}"')
+            lines.append(f'  <emotion {" ".join(em_attrs)} />')
+        elif emotion and not emotion.get("available"):
+            lines.append('  <emotion available="false" />')
 
         lines.append("</consciousness>")
         return "\n".join(lines)

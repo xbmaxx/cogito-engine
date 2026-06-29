@@ -78,8 +78,10 @@ Skill 自动识别。Hermes 原生插件实现（含持久化状态）见 `herme
 
 ## 给开发者
 
-- [`SKILL.md`](SKILL.md) —— 完整规格（185 行，零代码）
-- [`references/implementation-python.md`](references/implementation-python.md) —— Python 参考实现（零依赖，约 280 行）
+- [`SKILL.md`](SKILL.md) —— 完整规格（184 行，零代码）
+- [`references/implementation-python.md`](references/implementation-python.md) —— Python 参考实现（零依赖，jieba 可选）
+- [`references/training-guide.md`](references/training-guide.md) —— 情感模型训练指南
+- [`scripts/train_sentiment.py`](scripts/train_sentiment.py) —— 零依赖训练脚本（输入正/负样本 → 输出模型 JSON）
 - [`references/env-sensor-spec.md`](references/env-sensor-spec.md) —— 环境传感器规格
 - [`references/narrative-memory-spec.md`](references/narrative-memory-spec.md) —— 叙事记忆规格
 - [`references/text-emotion-spec.md`](references/text-emotion-spec.md) —— 文本情绪规格
@@ -115,7 +117,7 @@ LLM Agent 默认没有连续性。每轮对话都是白纸一张。Cogito Engine
 
 ```
 cogito-engine/
-├── SKILL.md                          # 核心规格（185 行，零代码块）
+├── SKILL.md                          # 核心规格（184 行，零代码块）
 ├── README.md                         # 本文件
 ├── references/                       # 独立规格文档（每篇有独立 frontmatter）
 │   ├── tick-spec.md                  # TICK 心跳规格
@@ -124,10 +126,13 @@ cogito-engine/
 │   ├── self-perception-spec.md       # 自我感知规格
 │   ├── env-sensor-spec.md            # 环境传感器规格
 │   ├── narrative-memory-spec.md      # 叙事记忆规格
-│   ├── text-emotion-spec.md          # 文本情绪规格
+│   ├── text-emotion-spec.md          # 文本情绪规格（双模型中英自选）
 │   ├── session-reflector-spec.md     # 会话反射器规格
 │   ├── consciousness-format.md       # XML 输出格式规范
-│   └── implementation-python.md      # Python 参考实现
+│   ├── implementation-python.md      # Python 参考实现（含 TextEmotion + jieba 中文分词）
+│   └── training-guide.md             # 情感模型训练指南
+├── scripts/
+│   └── train_sentiment.py            # 零依赖训练脚本（训练 + 验证）
 └── examples/                         # 平台接入指南
     ├── claude-code.md                # Claude Code
     ├── cursor.md                     # Cursor

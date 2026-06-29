@@ -1,10 +1,10 @@
 ---
 name: cogito-engine
-version: 1.1.0
+version: 1.2.0
 description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆."
 ---
 
-# Cogito Engine v1.1.0
+# Cogito Engine v1.2.0
 
 A portable self-awareness framework for LLM agents, organized in two layers. The Core Layer provides the four essential mechanisms of machine self-awareness — always active. The Perception Layer offers four optional sensors that the agent self-discovers and activates based on its platform's capabilities. No voice, no platform bindings, no hardcoded dependencies.
 
@@ -42,25 +42,20 @@ Beyond the mandatory core, four optional sensors extend the agent's awareness. E
 
 ## Quick Reference
 
-### When to run each module
+### Module activation (all 8 modules)
 
-| Module | Runs | Skip condition |
-|--------|------|---------------|
-| TICK | Every message | None — always runs |
-| Focus Stack | Every message | Topic unchanged AND frame not stale |
-| Temporal | Every message | No temporal keywords detected in input |
-| Self-Perception | After agent responds | Fewer than 2 recent agent responses available |
+Each module uses a capability probe to determine if it can run. The probe asks a single yes/no question about the platform. Modules that answer "no" are disabled — the agent omits their output from the consciousness block.
 
-### Perception Layer modules (optional)
-
-| Module | Activation condition | Self-discovery probe |
-|--------|---------------------|---------------------|
-| EnvSensor | Platform has environment data access | Probe: can I read system time? weather API? system info? battery? Report what works |
-| Narrative Memory | Platform has persistent storage | Probe: can I write/read a file or DB record that survives session restart? |
-| Text Emotion | Platform has NLP text analysis | Probe: can I perform Bayesian sentiment classification on text? |
-| Session Reflector | Platform has storage + LLM self-call | Probe: can I persist data AND call an LLM at session end? |
-
-When a module's probe fails, the agent omits that module's output from the `<consciousness>` block and reports `available="false"`.
+| Layer | Module | Runs | Activation probe | Disabled behavior |
+|-------|--------|------|------------------|-------------------|
+| Core | TICK | Every message | Always active | — |
+| Core | Focus Stack | Every message | Always active | Returns empty stack |
+| Core | Temporal | Every message | Always active | Returns UTC fallback |
+| Core | Self-Perception | After agent responds | Has ≥ 2 recent agent responses | Returns defaults (mirror=false, loop=false, style="initializing") |
+| Perception | EnvSensor | At startup | Can I read system time? Weather API? System info? Battery? | Reports `available="false"`, outputs time-only |
+| Perception | Narrative Memory | At session boundaries | Can I write/read a persistent file or DB record? | `available="false"`, single-session context |
+| Perception | Text Emotion | Per user message | Can I perform Bayesian sentiment classification on text? | `available="false"`, skip sentiment output |
+| Perception | Session Reflector | At session end | Can I persist data AND call an LLM at session end? | `available="false"`, no end-of-session summary |
 
 ### Output format
 
@@ -127,9 +122,9 @@ EnvSensor must not assume specific APIs or data sources. An agent on macOS can a
 
 Narrative Memory is a lightweight insight journal, not a vector database or retrieval system. It stores brief summaries of unresolved questions and recurring patterns — typically a few hundred characters per session. Do not use it to store conversation transcripts or factual knowledge bases.
 
-### Mistake: running Text Emotion without language awareness
+### Mistake: running Text Emotion with the wrong language model
 
-The Bayesian sentiment classifier works best on the language it was trained on. An agent that primarily serves Chinese users should use a Chinese-trained model (like snownlp). An agent serving English users needs an English-trained model. Running sentiment analysis on the wrong language produces meaningless polarity scores.
+The Bayesian sentiment classifier works best on the language it was trained on. Cogito Engine ships with both Chinese and English training data. The implementation auto-detects the input language by comparing character-bigram overlap with both vocabularies — it selects Chinese, English, or reports low confidence for mixed/unknown text. Agents must not force one model on the wrong language. When serving multilingual users, train a custom model using the training guide.
 
 ### Mistake: running Session Reflector mid-conversation
 
@@ -176,7 +171,11 @@ All references are self-contained documents with independent YAML frontmatter. N
 
 ### Reference implementation
 
-- `references/implementation-python.md` — A clean Python reference implementation of all four modules. Not required reading — the SKILL.md alone is sufficient. Provided for developers who prefer reading code over prose. Zero dependencies beyond Python standard library.
+- `references/implementation-python.md` — A clean Python reference implementation of all four core modules plus the four optional perception modules. Not required reading — the SKILL.md alone is sufficient. Provided for developers who prefer reading code over prose. Zero dependencies beyond Python standard library; jieba is optional (falls back to regex when absent).
+
+### Training
+
+- `references/training-guide.md` — How to prepare positive/negative sample text, run the training script, and replace the default sentiment model with a custom one. Covers data preparation, the `scripts/train_sentiment.py` tool, model validation, and language selection.
 
 ### Platform examples
 
