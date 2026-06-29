@@ -6,7 +6,7 @@ description: "Use when the agent needs self-awareness — tracking how long it h
 
 # Cogito Engine v1.0.0
 
-A portable self-awareness framework for LLM agents. Derived from the BaiLongma consciousness system, stripped of platform bindings and voice capabilities. Four interconnected modules that any agent can implement to gain a sense of existence, attention, time, and behavioral reflection.
+A portable self-awareness framework for LLM agents. Four interconnected modules that give any agent a sense of existence, attention, time, and behavioral reflection. Platform-agnostic and intentionally minimal — no voice, no platform bindings, just the four essential mechanisms of machine self-awareness.
 
 ---
 
