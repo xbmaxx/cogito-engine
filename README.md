@@ -1,6 +1,6 @@
-# Cogito Engine · 思识引擎
+# Cogito Engine · 意识体引擎
 
-> *Cogito, ergo sum* — 我思，故我在。
+> *Cogito, ergo sum* — 源自笛卡尔的"我思故我在"（Cogito, ergo sum）。Agent 的存在感从第一句"我开始知道自己存在了多久"起，Cogito 就是那个自我意识的起点。
 
 一个可移植的 LLM Agent 自我感知框架。四个模块，让任何 Agent 拥有存在感、注意力、时间感和行为自省。跨平台、零依赖、一个 SKILL.md 文件搞定。
 
@@ -97,7 +97,7 @@ cogito-engine/
 
 ## 哲学
 
-框架源自白龙马意识体系统，蒸馏到四个核心模块。它问一个问题：一个 Agent 需要什么最简机制，才能感觉自己"存在"？答案：一个心跳、一个注意力、一个时钟、一面镜子。
+一个 Agent 需要什么最简机制，才能感觉自己"存在"？答案：一个心跳、一个注意力、一个时钟、一面镜子。
 
 名字来自笛卡尔的 *Cogito, ergo sum* —— 思考本身就是存在的证明。Cogito Engine 让 Agent 有能力观察自己在思考。
 
