@@ -8,7 +8,7 @@ tags: [cogito-engine, consciousness, xml-format, output-schema]
 
 ## Purpose
 
-All four Cogito Engine modules converge into a single `<consciousness>` XML element. This document defines the complete schema, required and optional fields, and validation rules.
+All Cogito Engine modules converge into a single `<consciousness>` XML element. The Core Layer elements are always present. The Perception Layer elements appear only when the agent's platform supports them. This document defines the complete schema, required and optional fields, and validation rules.
 
 ## Complete Schema
 
@@ -23,6 +23,14 @@ All four Cogito Engine modules converge into a single `<consciousness>` XML elem
     [<frame keywords="comma,separated" source="user|agent" [type="session_summary"] />]*
   </focus_history>]
   <self mirror="true|false" [mirror_score="float"] loop="true|false" [loop_score="float"] style_cluster="string" />
+
+  <!-- Perception Layer (optional — each appears only when available) -->
+  [<env available="true|false">
+    [<source time="string" [weather="string"] [system_info="string"] [foreground_app="string"] [battery="string"] [network="string"] [location="string"] />]
+  </env>]
+  [<emotion available="true|false" [sentiment="positive|neutral|negative"] [polarity="float"] [confidence="float"] [label="string"] />]
+  [<narrative available="true|false" [unresolved_count="integer"] [last_session="date"] [recurring_patterns="integer"] />]
+  [<reflector available="true|false" [trigger="string"] [last_reflection="ISO8601"] />]
 </consciousness>
 ```
 
@@ -74,14 +82,61 @@ Optional. Contains archived frames in chronological order (oldest first, newest 
 | `loop_score` | float | No | Jaccard score vs previous response |
 | `style_cluster` | string | Yes | "initializing", "unchanged", "narrow", or "diverse" |
 
+### `<env>` (Perception Layer — optional)
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `available` | boolean | Yes | Whether environment data was successfully probed |
+
+### `<source>` (inside `<env>`)
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `time` | string | Yes | Source of time data (always "system") |
+| `weather` | string | No | Source of weather data (e.g., "api", "wttr.in") |
+| `system_info` | string | No | Source of system info (e.g., "shell", "psutil") |
+| `foreground_app` | string | No | Source of foreground app detection |
+| `battery` | string | No | Source of battery data |
+| `network` | string | No | Source of network status |
+| `location` | string | No | Source of geolocation data |
+
+### `<emotion>` (Perception Layer — optional)
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `available` | boolean | Yes | Whether text sentiment analysis is available |
+| `sentiment` | string | No | "positive", "neutral", or "negative" |
+| `polarity` | float | No | Sentiment score 0.0 (negative) to 1.0 (positive) |
+| `confidence` | float | No | Classification confidence 0.0 to 1.0 |
+| `label` | string | No | Optional emotion label (e.g., "焦虑", "excited") |
+
+### `<narrative>` (Perception Layer — optional)
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `available` | boolean | Yes | Whether narrative memory is active |
+| `unresolved_count` | integer | No | Number of unresolved questions carried from past sessions |
+| `last_session` | string | No | Date of the most recent previous session |
+| `recurring_patterns` | integer | No | Number of detected recurring patterns |
+
+### `<reflector>` (Perception Layer — optional)
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `available` | boolean | Yes | Whether session reflector is active |
+| `trigger` | string | No | Detection method ("signal", "inactivity", "command", "termination") |
+| `last_reflection` | ISO 8601 | No | Timestamp of the most recent session reflection |
+
 ## Validation Rules
 
 1. The `<consciousness>` root element must contain exactly one each of `<tick>`, `<temporal>`, `<focus>`, and `<self>`.
-2. `<focus_history>` is optional and may appear at most once.
-3. All boolean attributes must be the literal strings "true" or "false".
-4. `depth` must equal the number of `<frame>` children inside `<focus>`.
-5. `ttl` must be <= `interval` (interval is not serialized in the output).
-6. `iso` must include a timezone offset (e.g., `+08:00`), not "Z" or no offset.
+2. Perception Layer elements (`<env>`, `<emotion>`, `<narrative>`, `<reflector>`) are optional and may appear at most once each.
+3. `<focus_history>` is optional and may appear at most once.
+4. All boolean attributes must be the literal strings "true" or "false".
+5. `depth` must equal the number of `<frame>` children inside `<focus>`.
+6. `ttl` must be <= `interval` (interval is not serialized in the output).
+7. `iso` must include a timezone offset (e.g., `+08:00`), not "Z" or no offset.
+8. When a Perception Layer element has `available="false"`, it must have no other attributes or children.
 
 ## Platform Adaptation
 

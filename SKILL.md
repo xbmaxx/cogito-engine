@@ -1,12 +1,12 @@
 ---
 name: cogito-engine
-version: 1.0.0
-description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. Provides a portable four-module consciousness framework (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) that outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent that follows the specification. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈."
+version: 1.1.0
+description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆."
 ---
 
-# Cogito Engine v1.0.0
+# Cogito Engine v1.1.0
 
-A portable self-awareness framework for LLM agents. Four interconnected modules that give any agent a sense of existence, attention, time, and behavioral reflection. Platform-agnostic and intentionally minimal — no voice, no platform bindings, just the four essential mechanisms of machine self-awareness.
+A portable self-awareness framework for LLM agents, organized in two layers. The Core Layer provides the four essential mechanisms of machine self-awareness — always active. The Perception Layer offers four optional sensors that the agent self-discovers and activates based on its platform's capabilities. No voice, no platform bindings, no hardcoded dependencies.
 
 ---
 
@@ -26,6 +26,18 @@ The four modules are:
 
 The modules feed into a single output format. The agent reads this output before composing its next response, giving it continuity across turns.
 
+### Perception Layer (optional — agent self-discovers)
+
+Beyond the mandatory core, four optional sensors extend the agent's awareness. Each sensor is activated only if the agent's platform can support it. The agent performs a capability probe at startup and activates what it can.
+
+- **EnvSensor** — environment awareness. The agent probes its platform for accessible environment data: system time, weather APIs, system information (CPU/memory/disk), foreground application, battery level, network status, geolocation. There is no hardcoded list — the agent discovers what is available and reports it. When multiple sources exist for the same data type, the agent picks the most reliable one. When nothing is available beyond system time, the sensor gracefully degrades to time-only.
+
+- **Narrative Memory** — cross-session insight accumulation. The agent maintains a lightweight memory of unresolved questions, discovered patterns, and recurring themes across conversation sessions. Requires persistent storage (file, database, or platform-native memory API). When storage is unavailable, narrative memory is disabled and the agent works with single-session context only. When enabled, narrative memory feeds a brief summary of past insights into each new session.
+
+- **Text Emotion** — text sentiment detection. Analyzes user message text for emotional tone using a Bayesian classifier on character n-grams (the approach behind libraries like snownlp). Detects sentiment polarity (positive/neutral/negative) with a confidence score. No voice or audio dependency — text only. When the platform lacks NLP capability, the sensor is disabled.
+
+- **Session Reflector** — end-of-session narrative summary. When a conversation session ends and the platform supports both persistent storage and LLM self-call, the agent generates a structured summary: key topics discussed, decisions made, unresolved questions, and a brief narrative of the session arc. Stored alongside narrative memory for cross-session continuity. When storage or self-call is unavailable, the reflector is disabled.
+
 ---
 
 ## Quick Reference
@@ -38,6 +50,17 @@ The modules feed into a single output format. The agent reads this output before
 | Focus Stack | Every message | Topic unchanged AND frame not stale |
 | Temporal | Every message | No temporal keywords detected in input |
 | Self-Perception | After agent responds | Fewer than 2 recent agent responses available |
+
+### Perception Layer modules (optional)
+
+| Module | Activation condition | Self-discovery probe |
+|--------|---------------------|---------------------|
+| EnvSensor | Platform has environment data access | Probe: can I read system time? weather API? system info? battery? Report what works |
+| Narrative Memory | Platform has persistent storage | Probe: can I write/read a file or DB record that survives session restart? |
+| Text Emotion | Platform has NLP text analysis | Probe: can I perform Bayesian sentiment classification on text? |
+| Session Reflector | Platform has storage + LLM self-call | Probe: can I persist data AND call an LLM at session end? |
+
+When a module's probe fails, the agent omits that module's output from the `<consciousness>` block and reports `available="false"`.
 
 ### Output format
 
@@ -96,6 +119,22 @@ Mirror detection compares the agent's response to the user's message. Loop detec
 
 The `<consciousness>` XML is the canonical format. Platforms that cannot parse XML natively should adapt the format to their constraints (JSON, YAML, plain text key-value pairs) but must preserve all fields. Never strip fields to fit a platform — document the adaptation in that platform's example file.
 
+### Mistake: hardcoding environment data sources
+
+EnvSensor must not assume specific APIs or data sources. An agent on macOS can access `system_profiler`; an agent in a Docker container cannot. The sensor probes its environment and reports what it finds. Hardcoding a list of required environment fields breaks portability.
+
+### Mistake: treating Narrative Memory as a full memory system
+
+Narrative Memory is a lightweight insight journal, not a vector database or retrieval system. It stores brief summaries of unresolved questions and recurring patterns — typically a few hundred characters per session. Do not use it to store conversation transcripts or factual knowledge bases.
+
+### Mistake: running Text Emotion without language awareness
+
+The Bayesian sentiment classifier works best on the language it was trained on. An agent that primarily serves Chinese users should use a Chinese-trained model (like snownlp). An agent serving English users needs an English-trained model. Running sentiment analysis on the wrong language produces meaningless polarity scores.
+
+### Mistake: running Session Reflector mid-conversation
+
+Session Reflector runs once, at session end. Running it mid-conversation wastes computation and produces incomplete summaries. If the platform cannot detect session end, set a heuristic trigger (e.g., after 10 minutes of inactivity or on explicit user command).
+
 ---
 
 ## Delegation
@@ -124,9 +163,16 @@ All references are self-contained documents with independent YAML frontmatter. N
 - `references/temporal-spec.md` — Temporal parser: natural-language time expression vocabulary, longest-match-first resolution, timezone handling, word stripping
 - `references/self-perception-spec.md` — Self-Perception: character bigram algorithm, Jaccard similarity threshold configuration, mirror vs loop distinction, style cluster detection
 
+### Perception Layer specifications (optional modules)
+
+- `references/env-sensor-spec.md` — EnvSensor: capability probing protocol, environment data taxonomy, graceful degradation, cross-platform adaptation
+- `references/narrative-memory-spec.md` — Narrative Memory: insight journal format, cross-session persistence, unresolved question tracking, pattern accumulation
+- `references/text-emotion-spec.md` — Text Emotion: Bayesian sentiment classification on character n-grams, language-aware model selection, polarity scoring
+- `references/session-reflector-spec.md` — Session Reflector: end-of-session trigger detection, summary structure (topics/decisions/questions/narrative), storage integration
+
 ### Output format
 
-- `references/consciousness-format.md` — Complete XML schema for the `<consciousness>` output block, field definitions, validation rules, platform adaptation notes
+- `references/consciousness-format.md` — Complete XML schema for the `<consciousness>` output block, including both Core Layer and Perception Layer elements, field definitions, validation rules, platform adaptation notes
 
 ### Reference implementation
 
