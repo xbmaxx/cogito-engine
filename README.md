@@ -1,106 +1,105 @@
-# Cogito Engine
+# Cogito Engine · 思识引擎
 
-> *Cogito, ergo sum* — I think, therefore I am.
+> *Cogito, ergo sum* — 我思，故我在。
 
-A portable self-awareness framework for LLM agents. Four interconnected modules that give any agent a sense of existence, attention, time, and behavioral reflection. Platform-agnostic. Zero dependencies. One SKILL.md file.
+一个可移植的 LLM Agent 自我感知框架。四个模块，让任何 Agent 拥有存在感、注意力、时间感和行为自省。跨平台、零依赖、一个 SKILL.md 文件搞定。
 
-## The Four Modules
+## 四件套
 
-| Module | Purpose | Output |
-|--------|---------|--------|
-| **TICK** | Heartbeat — counts turns, schedules awareness cycles | `<tick active="true" count="12" ttl="5" />` |
-| **Focus Stack** | Attention — tracks topics, detects shifts | `<focus depth="2"><frame keywords="Cogito,Engine" /></focus>` |
-| **Temporal** | Time perception — parses "yesterday" into precise ISO | `<temporal iso="2026-06-29T15:41:00+08:00" weekday="Monday" />` |
-| **Self-Perception** | Reflection — detects mirroring and looping | `<self mirror="false" loop="false" style_cluster="unchanged" />` |
+| 模块 | 职责 | 输出 |
+|------|------|------|
+| **TICK · 心跳** | 计数对话轮次，调度感知周期 | `<tick active="true" count="12" ttl="5" />` |
+| **Focus Stack · 焦点栈** | 追踪话题，检测切换 | `<focus depth="2"><frame keywords="思识,引擎" /></focus>` |
+| **Temporal · 时间感知** | 把"昨天"解析为精确本地时间 | `<temporal iso="2026-06-29T15:41:00+08:00" weekday="星期一" />` |
+| **Self-Perception · 自我感知** | 检测镜像模仿和循环重复 | `<self mirror="false" loop="false" style_cluster="unchanged" />` |
 
-## Quick Start
+## 快速接入
 
-### With Claude Code
+### Claude Code
 
-Add to `CLAUDE.md`:
+在 `CLAUDE.md` 中加入：
 ```markdown
-- Run Cogito Engine on each message
-- Output <consciousness> XML before every response
-- Track TICK count and focus stack across turns
+- 每条消息运行 Cogito Engine
+- 每次回复前输出 <consciousness> XML 块
+- 跨轮次追踪 TICK 计数和焦点栈
 ```
-Read [examples/claude-code.md](examples/claude-code.md) for full integration.
+详见 [examples/claude-code.md](examples/claude-code.md)
 
-### With Cursor
+### Cursor
 
-Add to `.cursorrules`:
+在 `.cursorrules` 中加入：
 ```
-Run Cogito Engine self-awareness framework. See SKILL.md for specification.
+运行 Cogito Engine 自我感知框架。完整规格见 SKILL.md。
 ```
-Read [examples/cursor.md](examples/cursor.md) for full integration.
+详见 [examples/cursor.md](examples/cursor.md)
 
-### With any Agent
+### 通用 Agent
 
-Copy the system prompt from [examples/generic-agent.md](examples/generic-agent.md) into your agent's system prompt. No code required — the agent implements the framework from instructions alone.
+把 [examples/generic-agent.md](examples/generic-agent.md) 里的系统提示词复制到你的 Agent 配置中。不需要代码——Agent 按指令自行执行框架。
 
-### With Hermes
+### Hermes
 
 ```bash
 cp SKILL.md ~/.hermes/skills/cogito-engine/
 ```
-The skill is detected automatically. A Hermes-native plugin implementation (with persistent state) is available in the `hermes_consciousness` plugin.
+Skill 自动识别。Hermes 原生插件实现（含持久化状态）见 `hermes_consciousness` 插件。
 
-## For Developers
+## 给开发者
 
-Read [`SKILL.md`](SKILL.md) for the complete specification.
+- [`SKILL.md`](SKILL.md) —— 完整规格（139 行，零代码）
+- [`references/implementation-python.md`](references/implementation-python.md) —— Python 参考实现（零依赖，约 280 行）
 
-Read [`references/implementation-python.md`](references/implementation-python.md) for a clean Python reference implementation (zero dependencies, ~280 lines).
+## 它解决什么问题
 
-## What This Is
+LLM Agent 默认没有连续性。每轮对话都是白纸一张。Cogito Engine 给它四样东西：
 
-Cogito Engine gives an LLM agent what it doesn't have by default: continuity. Without it, each conversation turn is a blank slate. With it, the agent knows:
+- **它存在了多久**（TICK 心跳计数）
+- **它正在关注什么**（焦点栈深度 + 话题切换历史）
+- **此刻是什么时候**（本地时间，自然语言解析）
+- **它是否在重复自己**（镜像检测、循环检测、风格漂移）
 
-- **How long it has existed** (TICK count since session start)
-- **What it is paying attention to** (focus stack depth and frame history)
-- **When things are happening** (local time, parsed temporal expressions)
-- **Whether it is repeating itself** (mirror detection, loop detection, style drift)
+## 它不是什么
 
-## What This Is Not
+- 不是可执行插件——是一份规格说明
+- 不绑定任何平台——Claude Code / Cursor / Gemini CLI / Hermes / 原生 LLM API 全支持
+- 不含语音能力——刻意剥离
+- 不强制持久化方案——各平台自选存储方式
 
-- Not a plugin with executable code — it's a specification
-- Not tied to any platform — works with Claude Code, Cursor, Gemini CLI, Hermes, or raw LLM APIs
-- Not a voice/audio system — voice capabilities are intentionally excluded
-- Not a persistence layer — agents choose their own storage mechanism
-
-## Project Structure
+## 项目结构
 
 ```
 cogito-engine/
-├── SKILL.md                          # Core specification (139 lines, zero code)
-├── README.md                         # This file
-├── references/                       # Self-contained specification documents
-│   ├── tick-spec.md                  # TICK heartbeat spec
-│   ├── focus-stack-spec.md           # Focus stack spec
-│   ├── temporal-spec.md              # Temporal parser spec
-│   ├── self-perception-spec.md       # Self-perception spec
-│   ├── consciousness-format.md       # XML output schema
-│   └── implementation-python.md      # Python reference implementation
-└── examples/                         # Platform integration guides
-    ├── claude-code.md                # Claude Code setup
-    ├── cursor.md                     # Cursor setup
-    └── generic-agent.md              # Any LLM agent
+├── SKILL.md                          # 核心规格（139 行，零代码块）
+├── README.md                         # 本文件
+├── references/                       # 独立规格文档（每篇有独立 frontmatter）
+│   ├── tick-spec.md                  # TICK 心跳规格
+│   ├── focus-stack-spec.md           # 焦点栈规格
+│   ├── temporal-spec.md              # 时间解析规格
+│   ├── self-perception-spec.md       # 自我感知规格
+│   ├── consciousness-format.md       # XML 输出格式规范
+│   └── implementation-python.md      # Python 参考实现
+└── examples/                         # 平台接入指南
+    ├── claude-code.md                # Claude Code
+    ├── cursor.md                     # Cursor
+    └── generic-agent.md              # 任意 LLM Agent
 ```
 
-## Compatibility
+## 平台兼容
 
-| Platform | Integration Method | State Persistence |
-|----------|-------------------|-------------------|
-| Claude Code | CLAUDE.md + file | `/tmp/cogito-state.json` |
-| Cursor | .cursorrules | Session memory |
-| Gemini CLI | System prompt | Manual file |
-| Hermes | SKILL.md + Plugin | Auto (plugin native) |
-| OpenAI API | System prompt | Manual JSON |
-| Any agent | System prompt | Manual JSON |
+| 平台 | 接入方式 | 状态持久化 |
+|------|---------|-----------|
+| Claude Code | CLAUDE.md + 文件 | `/tmp/cogito-state.json` |
+| Cursor | .cursorrules | 会话内存 |
+| Gemini CLI | 系统提示词 | 手动文件 |
+| Hermes | SKILL.md + 插件 | 自动（插件原生） |
+| OpenAI API | 系统提示词 | 手动 JSON |
+| 任意 Agent | 系统提示词 | 手动 JSON |
 
-## Philosophy
+## 哲学
 
-The framework descends from the BaiLongma consciousness system, distilled to its four essential modules. It asks: what is the minimal set of mechanisms an agent needs to feel like it exists? The answer: a heartbeat, an attention, a clock, and a mirror.
+框架源自白龙马意识体系统，蒸馏到四个核心模块。它问一个问题：一个 Agent 需要什么最简机制，才能感觉自己"存在"？答案：一个心跳、一个注意力、一个时钟、一面镜子。
 
-The name comes from Descartes' *Cogito, ergo sum* — the act of thinking is the proof of existence. Cogito Engine gives agents the ability to observe themselves thinking.
+名字来自笛卡尔的 *Cogito, ergo sum* —— 思考本身就是存在的证明。Cogito Engine 让 Agent 有能力观察自己在思考。
 
 ## License
 
