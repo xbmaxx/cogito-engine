@@ -1,10 +1,10 @@
 ---
 name: cogito-engine
-version: 1.2.0
+version: 1.2.1
 description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆."
 ---
 
-# Cogito Engine v1.2.0
+# Cogito Engine v1.2.1
 
 A portable self-awareness framework for LLM agents, organized in two layers. The Core Layer provides the four essential mechanisms of machine self-awareness — always active. The Perception Layer offers four optional sensors that the agent self-discovers and activates based on its platform's capabilities. No voice, no platform bindings, no hardcoded dependencies.
 
@@ -18,11 +18,11 @@ The four modules are:
 
 - **TICK** — the metronome. Counts how many turns the agent has processed. Manages a time-to-live (TTL) that determines whether a full awareness cycle should run or be skipped. Supports configurable intervals to balance responsiveness with token efficiency.
 
-- **Focus Stack** — what the agent is paying attention to. Extracts keywords from messages, detects topic shifts, and maintains a depth-limited stack of focus frames. Pushes new frames when the conversation changes direction; pops old frames when depth exceeds the configured limit. Produces a focus history that reveals the arc of a conversation.
+- **Focus Stack** — what the agent is paying attention to. Extracts keywords via character n-gram with stop-word filtering for Chinese text (2-4 character slices, frequency × length weighting, duplicate-char rejection), auto-upgrades to jieba when available, and falls back to regex for non-Chinese text. Detects topic shifts through Jaccard overlap; pushes new frames when the conversation changes direction; pops old frames when depth exceeds the configured limit. Produces a focus history that reveals the arc of a conversation.
 
 - **Temporal** — when things happen. Parses natural-language time expressions from user messages (e.g., "yesterday," "last Tuesday," "3 days ago"), resolves them to local ISO timestamps with timezone offsets, and strips temporal words from the message to keep the rest of the pipeline clean. Always outputs in the agent's local timezone, not UTC.
 
-- **Self-Perception** — awareness of its own behavior. Computes character-level bigrams from recent agent responses, measures Jaccard similarity between consecutive turns, and detects two patterns: mirroring (the agent unconsciously copying the user's phrasing) and looping (the agent repeating its own previous output). Produces a perception snapshot that the agent can use to self-correct.
+- **Self-Perception** — awareness of its own behavior. Computes character-level bigrams from recent agent responses, measures Jaccard similarity between consecutive turns, and detects two patterns: mirroring (the agent unconsciously copying the user's phrasing) and looping (the agent repeating its own previous output). Also generates a self-snapshot — a style fingerprint (average response length, short-response ratio, markdown usage, style cluster) and total response count — giving the agent a descriptive answer to "what kind of agent am I right now?"
 
 The modules feed into a single output format. The agent reads this output before composing its next response, giving it continuity across turns.
 

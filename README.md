@@ -32,7 +32,7 @@
 | **TICK · 心跳** | 计数对话轮次，调度感知周期 | `<tick active="true" count="12" ttl="5" />` |
 | **Focus Stack · 焦点栈** | 追踪话题，检测切换 | `<focus depth="2"><frame keywords="思识,引擎" /></focus>` |
 | **Temporal · 时间感知** | 把"昨天"解析为精确本地时间 | `<temporal iso="2026-06-29T15:41:00+08:00" weekday="星期一" />` |
-| **Self-Perception · 自我感知** | 检测镜像模仿和循环重复 | `<self mirror="false" loop="false" style_cluster="unchanged" />` |
+| **Self-Perception · 自我感知** | 检测镜像/循环 + 自我快照（风格指纹） | `<self mirror="false" loop="false" style_cluster="unchanged" />` |
 
 ## 感知层（可选）
 
@@ -79,7 +79,7 @@ Skill 自动识别。Hermes 原生插件实现（含持久化状态）见 `herme
 ## 给开发者
 
 - [`SKILL.md`](SKILL.md) —— 完整规格（184 行，零代码）
-- [`references/implementation-python.md`](references/implementation-python.md) —— Python 参考实现（零依赖，jieba 可选）
+- [`references/implementation-python.md`](references/implementation-python.md) —— Python 参考实现（零依赖，jieba 可选，含 n-gram 中文关键词 + 自我快照）
 - [`references/training-guide.md`](references/training-guide.md) —— 情感模型训练指南
 - [`scripts/train_sentiment.py`](scripts/train_sentiment.py) —— 零依赖训练脚本（输入正/负样本 → 输出模型 JSON）
 - [`references/env-sensor-spec.md`](references/env-sensor-spec.md) —— 环境传感器规格
@@ -121,9 +121,9 @@ cogito-engine/
 ├── README.md                         # 本文件
 ├── references/                       # 独立规格文档（每篇有独立 frontmatter）
 │   ├── tick-spec.md                  # TICK 心跳规格
-│   ├── focus-stack-spec.md           # 焦点栈规格
+│   ├── focus-stack-spec.md           # 焦点栈规格（n-gram 中文关键词）
 │   ├── temporal-spec.md              # 时间解析规格
-│   ├── self-perception-spec.md       # 自我感知规格
+│   ├── self-perception-spec.md       # 自我感知规格（含自我快照）
 │   ├── env-sensor-spec.md            # 环境传感器规格
 │   ├── narrative-memory-spec.md      # 叙事记忆规格
 │   ├── text-emotion-spec.md          # 文本情绪规格（双模型中英自选）

@@ -198,38 +198,114 @@ class FocusStack:
         self.frames = []       # Active frames (most recent last)
         self.history = []      # Popped frames (most recent last)
 
-    def extract_keywords(self, text: str, max_kw: int = 5) -> list[str]:
-        """Extract keywords from text. Uses regex for general text,
-        with jieba fallback for Chinese-dominant input."""
-        # Detect if text is predominantly Chinese
-        cjk_chars = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')
-        is_chinese = cjk_chars > len(text) * 0.4
+# ═══════════════════════════════════════════════════════════════════
+# Chinese keyword extraction — n-gram + stop words + length weighting
+# ═══════════════════════════════════════════════════════════════════
 
-        if is_chinese:
-            try:
-                import jieba
-                words = list(jieba.cut(text))
-            except ImportError:
-                words = re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
-        else:
-            words = re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
+_STOP_WORDS = {
+    '的', '了', '是', '在', '我', '你', '他', '她', '它',
+    '我们', '你们', '他们', '这', '那', '有', '没有',
+    '和', '与', '把', '被', '因为', '所以', '如果',
+    '一个', '一些', '什么', '怎么', '为什么',
+    '帮我', '请', '好的', '明白', '告诉', '让', '做', '去', '来', '说', '给',
+    '今天', '昨天', '前天', '大前天',
+    '今早', '今晨', '今夜', '今晚', '昨晚', '昨夜', '昨日', '今日',
+}
 
-        if not words:
+_STOP_CHARS = set('的了着过来去吗呢吧啊呀嘛哦和与跟或及并很太再又也都还只就才')
+
+_STOP_HEAD_CHARS = set('们个些点次件种样')
+
+_STOP_TAIL_CHARS = set('一几某每这那今')
+
+
+def _is_valid_ngram(word: str) -> bool:
+    """Filter out stop words, stop chars, duplicate-heavy words."""
+    if not word or len(word) < 2 or word in _STOP_WORDS:
+        return False
+    for ch in word:
+        if ch in _STOP_CHARS:
+            return False
+    if word[0] in _STOP_HEAD_CHARS:
+        return False
+    if word[-1] in _STOP_TAIL_CHARS:
+        return False
+    # Duplicate char filter: "哈哈", "哈哈哈" → skip
+    if len(set(word)) == 1 and len(word) >= 2:
+        return False
+    return True
+
+
+def _length_weight(n: int) -> float:
+    """2-char words are strongest; 4-char slightly weaker."""
+    if n == 2:
+        return 1.5
+    if n == 4:
+        return 0.8
+    return 1.0
+
+
+def _extract_ngram_keywords(text: str, max_keywords: int = 5) -> list[str]:
+    """Extract Chinese keywords via n-gram with stop-word filtering.
+    Falls back to regex for non-Chinese text. Zero external dependencies."""
+    if not text:
+        return []
+
+    # Detect Chinese-dominant text
+    cjk_chars = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')
+    is_chinese = cjk_chars > len(text) * 0.3
+
+    if is_chinese:
+        # Try jieba first for accurate segmentation
+        try:
+            import jieba
+            words = list(jieba.cut(text))
+            words = [w.strip() for w in words if _is_valid_ngram(w.strip())]
+            if not words:
+                return []
+            freq = {}
+            for w in words:
+                freq[w] = freq.get(w, 0) + 1
+            scored = sorted(freq.items(), key=lambda x: (-x[1], -len(x[0])))
+            return [w for w, _ in scored[:max_keywords]]
+        except ImportError:
+            pass
+
+        # Fallback: character n-gram extraction
+        import re
+        cleaned = re.sub(r'[，。！？、；：""''【】［］（）\d]', ' ', text)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        if not cleaned:
             return []
 
-        # Count frequency, skip single-char tokens
+        freq = {}
+        for i in range(len(cleaned) - 1):
+            for ngram_len in range(2, min(5, len(cleaned) - i + 1)):
+                word = cleaned[i:i + ngram_len]
+                if ' ' in word:
+                    continue  # skip space-padded fragments
+                word = word.strip()
+                if word and _is_valid_ngram(word):
+                    freq[word] = freq.get(word, 0) + 1
+
+        scored = [(w, f * _length_weight(len(w))) for w, f in freq.items()]
+        # Prefer shorter n-grams (more likely real words) when scores tie
+        scored.sort(key=lambda x: (-x[1], len(x[0])))
+        return [w for w, _ in scored[:max_keywords]]
+    else:
+        # Non-Chinese: regex word extraction
+        import re
+        words = re.findall(r"[\w]{3,}", text.lower())
+        if not words:
+            return []
         freq = {}
         for w in words:
-            w = w.strip().lower()
+            w = w.strip()
             if len(w) < 2:
                 continue
-            # Skip pure punctuation / whitespace
-            if not any(ch.isalpha() or '\u4e00' <= ch <= '\u9fff' for ch in w):
-                continue
             freq[w] = freq.get(w, 0) + 1
-
         sorted_words = sorted(freq.items(), key=lambda x: -x[1])
-        return [w for w, _ in sorted_words[:max_kw]]
+        return [w for w, _ in sorted_words[:max_keywords]]
 
     def _overlap_ratio(self, kw_a: list[str], kw_b: list[str]) -> float:
         """Jaccard-like overlap between two keyword lists."""
@@ -245,7 +321,7 @@ class FocusStack:
         Extract keywords, detect topic shift, update stack.
         Returns the keywords extracted.
         """
-        keywords = self.extract_keywords(text)
+        keywords = _extract_ngram_keywords(text)
 
         if not keywords:
             return []
@@ -371,6 +447,50 @@ class SelfPerception:
                     result["style_cluster"] = "unchanged"
 
         return result
+
+    def snapshot(self) -> Optional[dict]:
+        """Generate a self-awareness summary — style fingerprint + tool habits.
+        This is the agent's answer to "what kind of agent am I right now?"
+        Returns None if not enough history."""
+        if len(self.agent_responses) < 2:
+            return None
+
+        recent = self.agent_responses[-5:]
+
+        # Style fingerprint: avg length, short-ratio, markdown usage
+        lengths = [len(r) for r in recent if r]
+        if not lengths:
+            return None
+
+        avg_len = round(sum(lengths) / len(lengths))
+        short_count = sum(1 for n in lengths if n <= 20)
+        has_markdown = any('**' in r or '\n-' in r or '\n#' in r for r in recent)
+
+        style = {
+            "avg_len": avg_len,
+            "short_ratio": round(short_count / len(recent), 2),
+            "has_markdown": has_markdown,
+            "sample_count": len(recent),
+        }
+
+        # Style cluster from existing detection logic
+        clusters = []
+        for i in range(len(recent)):
+            for j in range(i + 1, len(recent)):
+                clusters.append(self._jaccard(
+                    self._bigrams(recent[i]), self._bigrams(recent[j])
+                ))
+        if clusters:
+            avg_sim = sum(clusters) / len(clusters)
+            if avg_sim > 0.5:
+                cluster = "tight (high consistency)"
+            elif avg_sim < 0.2:
+                cluster = "wide (experimental)"
+            else:
+                cluster = "normal"
+            style["cluster"] = cluster
+
+        return {"style": style, "total_responses": len(self.agent_responses)}
 
 
 # ═══════════════════════════════════════════════════════════════════
