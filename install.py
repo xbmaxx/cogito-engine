@@ -272,19 +272,19 @@ def bootstrap_engine() -> bool:
 # ── dry-run report ─────────────────────────────────────────────────────────
 
 def dry_run_report(platforms: List[str]) -> None:
-    print("\n┌─ Cogito Engine dry-run report ──────────────────────────────┐")
-    print(f"│ OS          : {sys.platform}")
-    print(f"│ Python      : {PYTHON}")
-    print(f"│ COGITO_HOME : {COGITO_HOME}")
-    print(f"│ Repo root   : {REPO_ROOT}")
-    print(f"│ Detected platforms ({len(platforms)}):")
+    print("\n=== Cogito Engine dry-run report ===")
+    print(f"OS          : {sys.platform}")
+    print(f"Python      : {PYTHON}")
+    print(f"COGITO_HOME : {COGITO_HOME}")
+    print(f"Repo root   : {REPO_ROOT}")
+    print(f"Detected platforms ({len(platforms)}):")
     if platforms:
         for p in platforms:
-            print(f"│   • {p}")
+            print(f"  - {p}")
     else:
-        print("│   (none)")
-    print(f"│ Engine core : {'found' if (REPO_ROOT / 'cogito_core').is_dir() else 'missing'}")
-    print(f"└─────────────────────────────────────────────────────────────┘")
+        print("  (none)")
+    print(f"Engine core : {'found' if (REPO_ROOT / 'cogito_core').is_dir() else 'missing'}")
+    print("=====================================")
 
 
 # ── CLI entry ──────────────────────────────────────────────────────────────
