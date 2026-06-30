@@ -18,7 +18,7 @@
 - 每个模块带能力探针，Agent 根据平台可用性自发现并决定启用/跳过
 - EnvSensor：时间/系统/电池/天气探针，不硬编码数据源
 - Narrative Memory：跨会话叙事日记，存储未解决问题和重复模式
-- Text Emotion：SnowNLP 贝叶斯情感分析，纯文本，不绑定语音
+- Text Emotion：SnowNLP 贝叶斯情感分析
 - Session Reflector：会话结束自动生成叙事摘要
 - 新增 4 份感知层规格文档
 - 更新 `consciousness-format.md` 补充感知层 XML 元素
@@ -47,10 +47,9 @@
 
 ## v1.3.0 — 2026.06.30
 
-- 新增 `cogito_core/`：平台无关 Python 引擎包（13 个文件）
+- 新增 `cogito_core/`：通用 Python 引擎包（13 个文件，可在 Hermes、Claude Code、Copilot 等多个 Agent 平台运行）
   - `engine.py`：CogitoEngine 编排器，`process(messages, state) → xml` 纯函数接口
   - `persistence.py`：统一持久化层，读写 `~/.cogito/`（可配 `COGITO_HOME`）
-  - 8 个模块从 `hermes_consciousness` 插件抽离，移除 Hermes 平台依赖
 - 新增 `adapters/`：6 个平台适配器
   - `hermes_adapter.py`：Hermes Plugin 接口（register / pre_llm_call / on_session_end）
   - `hook_entry.py`：Claude Code / Copilot / Codex 共用 CLI（stdin JSON → stdout additionalContext）
