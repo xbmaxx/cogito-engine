@@ -45,6 +45,20 @@
 
 [下载 v1.2.1](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.2.1.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.2.1.tar.gz)
 
+## v1.3.1 — 2026.06.30
+
+- **修复 Hermes 插件安装兼容性**（#1 用户体验问题）
+  - 新增 `adapters/plugin.yaml`：Hermes 插件元数据声明（v1.3.1）
+  - 新增 `adapters/__init__.py`：`register(ctx)` 入口函数，Hermes 启动时自动加载
+  - 修正 `adapters/hermes_adapter.py`：`ctx.hooks["..."] = ...` → `ctx.register_hook("...", ...)`，对齐 Hermes 插件 API
+  - 修正 `install.py`：`_install_hermes()` 从复制单个文件改为复制整个 `adapters/` 目录
+- **修复 Windows 编码兼容性**
+  - `install.py` 中 `dry_run_report()` 的 box-drawing 字符（┌─│└）替换为 ASCII，解决 Windows cp1252 编码崩溃
+- **修复 `keywords.py` SyntaxWarning**
+  - 正则表达式中 `\d` 替换为 `0-9` 字符类，消除 Python 3.12+ DeprecationWarning
+
+[下载 v1.3.1](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.3.1.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.3.1.tar.gz)
+
 ## v1.3.0 — 2026.06.30
 
 - 新增 `cogito_core/`：通用 Python 引擎包（13 个文件，可在 Hermes、Claude Code、Copilot 等多个 Agent 平台运行）

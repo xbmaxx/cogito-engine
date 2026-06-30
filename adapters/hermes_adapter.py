@@ -153,8 +153,8 @@ class HermesAdapter:
         logger.info("HermesAdapter 已注册，session_id=%s", getattr(ctx, "session_id", "N/A"))
 
         # 注册 hook 回调
-        ctx.hooks["pre_llm_call"] = self._pre_llm_call
-        ctx.hooks["on_session_end"] = self._on_session_end
+        ctx.register_hook("pre_llm_call", self._pre_llm_call)
+        ctx.register_hook("on_session_end", self._on_session_end)
 
         # 可选：注册 tools（让 Agent 能主动触发感知）
         # 此处可扩展 register_cogito_tools(ctx)

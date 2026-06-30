@@ -160,16 +160,21 @@ def install_for_platform(platform: str, update: bool = False) -> bool:
 def _install_hermes(update: bool) -> bool:
     home = Path.home()
     plugin_dir = home / ".hermes" / "plugins" / "hermes_consciousness"
-    adapter_src = "adapters/hermes_adapter.py"
 
-    if plugin_dir.exists() and (plugin_dir / "hermes_adapter.py").exists():
+    if plugin_dir.exists() and (plugin_dir / "plugin.yaml").exists():
         if update:
             print("  ⟳ update mode: overwriting existing plugin")
         else:
-            print("  ✓ Hermes plugin already installed – skipping")
+            print("  ✓ Hermes plugin already installed - skipping")
             return True
 
-    return _cp(adapter_src, plugin_dir / "hermes_adapter.py")
+    try:
+        shutil.copytree(REPO_ROOT / "adapters", plugin_dir, dirs_exist_ok=True)
+        print(f"  ✓ Hermes plugin installed → {plugin_dir}")
+        return True
+    except Exception as e:
+        print(f"  ✗ Hermes plugin install failed: {e}")
+        return False
 
 
 # ── Claude / Copilot / Codex (JSON hook configs) ───────────────────────────
