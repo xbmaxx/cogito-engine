@@ -1,0 +1,9 @@
+# Cogito Engine - optional dependencies
+# Core engine uses Python stdlib only.
+# The following are optional optimizations:
+
+# Chinese word segmentation (improves N-gram keyword extraction quality)
+jieba>=0.42.1
+
+# Sentiment analysis (enables emotional polarity in consciousness stream)
+snownlp>=0.12.3
