@@ -81,7 +81,7 @@ def extract_keywords(text: str, max_keywords: int = 8) -> list[str]:
 
     # 清理：去标点、数字
     import re
-    cleaned = re.sub(r'[，。！？、；：""''【】［］（）\d]', ' ', text)
+    cleaned = re.sub(r'[，。！？、；：""''【】［］（）0-9]', ' ', text)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     if not cleaned:
         return []

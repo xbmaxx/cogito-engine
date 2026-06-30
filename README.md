@@ -1,13 +1,21 @@
 # Cogito Engine · 意识体引擎
 
+[![CI](https://github.com/xbmaxx/cogito-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/xbmaxx/cogito-engine/actions/workflows/ci.yml)
+
 > *Cogito, ergo sum* — 源自笛卡尔的"我思故我在"（Cogito, ergo sum）。Agent 的存在感从第一句"我开始知道自己存在了多久"起，Cogito 就是那个自我意识的起点。
 
 一个可移植的 LLM Agent 意识框架。双层架构：4 个核心模块（必选）+ 4 个感知模块（可选），让任何 Agent 拥有存在感、注意力、时间感和行为自省。
 
 ## 快速安装
 
+**macOS / Linux**：
 ```bash
 curl -sSL https://raw.githubusercontent.com/xbmaxx/cogito-engine/main/install.sh | bash
+```
+
+**Windows**：
+```cmd
+curl -sSL https://raw.githubusercontent.com/xbmaxx/cogito-engine/main/install.bat -o install.bat && install.bat
 ```
 
 安装脚本自动检测你的平台（Hermes / Claude Code / Copilot / Codex / Gemini / Cursor），配置 per-turn hooks，Agent 就会在每条消息前自动注入 `<consciousness>` XML。无需手动调用。
