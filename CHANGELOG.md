@@ -47,12 +47,7 @@
 
 ## v1.3.2 — 2026.06.30
 
-- **修复 Hermes 多 Profile 插件安装路径**（#2 用户体验问题）
-  - 新增 `_detect_hermes_profile()`：自动检测活跃 Hermes profile
-  - 检测策略：`HERMES_PROFILE` 环境变量 → 单 profile 自动识别 → 全局兜底
-  - 新增 `--hermes-profile <name|global>` CLI 参数
-  - `_install_hermes()` 默认跟随 profile 目录而非写死全局路径
-  - 其他 6 个平台安装逻辑零改动
+- **修复 Hermes 多 Profile 环境下插件安装到错误目录的问题。** 此前插件始终装到全局目录，在非默认 Profile 下无法被加载。现在会自动检测当前 Profile 并安装到对应目录。
 
 [下载 v1.3.2](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.3.2.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.3.2.tar.gz)
 
