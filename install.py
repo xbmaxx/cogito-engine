@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -136,12 +136,12 @@ def detect_platform() -> List[str]:
 
 # ── install per-platform ───────────────────────────────────────────────────
 
-def install_for_platform(platform: str, update: bool = False) -> bool:
+def install_for_platform(platform: str, update: bool = False, hermes_profile: Optional[str] = None) -> bool:
     """Install Cogito Engine hooks for a single platform.  Returns True on success."""
     print(f"\n── Installing for {platform} ──")
 
     if platform == "hermes":
-        return _install_hermes(update)
+        return _install_hermes(update, profile=hermes_profile)
     elif platform in ("claude", "copilot", "codex"):
         return _install_hook_json(platform, update)
     elif platform == "gemini":
@@ -155,11 +155,35 @@ def install_for_platform(platform: str, update: bool = False) -> bool:
         return False
 
 
+# ── Hermes profile detection ────────────────────────────────────────────────
+
+def _detect_hermes_profile() -> str:
+    """Detect current Hermes profile. Returns 'global' if undetermined."""
+    # 1. Environment variable (injected by Hermes session)
+    p = os.environ.get("HERMES_PROFILE")
+    if p:
+        return p
+
+    # 2. Auto-detect: if exactly one profile exists, use it
+    profiles_dir = Path.home() / ".hermes" / "profiles"
+    if profiles_dir.is_dir():
+        profiles = [d.name for d in profiles_dir.iterdir() if d.is_dir()]
+        if len(profiles) == 1:
+            return profiles[0]
+
+    # 3. Fallback to global
+    return "global"
+
+
 # ── Hermes ─────────────────────────────────────────────────────────────────
 
-def _install_hermes(update: bool) -> bool:
+def _install_hermes(update: bool, profile: Optional[str] = None) -> bool:
     home = Path.home()
-    plugin_dir = home / ".hermes" / "plugins" / "hermes_consciousness"
+    target = profile or _detect_hermes_profile()
+    if target and target != "global":
+        plugin_dir = home / ".hermes" / "profiles" / target / "plugins" / "hermes_consciousness"
+    else:
+        plugin_dir = home / ".hermes" / "plugins" / "hermes_consciousness"
 
     if plugin_dir.exists() and (plugin_dir / "plugin.yaml").exists():
         if update:
@@ -308,6 +332,8 @@ Examples:
     )
     parser.add_argument("--update", action="store_true", help="Force update / overwrite existing hooks")
     parser.add_argument("--platform", type=str, help="Install only a specific platform (e.g. hermes)")
+    parser.add_argument("--hermes-profile", type=str, default=None,
+                        help="Hermes profile name (auto-detect: HERMES_PROFILE env, then single profile, then global)")
     parser.add_argument("--dry-run", action="store_true", help="Detect platforms and print report; no changes")
 
     args = parser.parse_args()
@@ -322,12 +348,12 @@ Examples:
         if args.platform not in platforms:
             print(f"⚠ '{args.platform}' not detected, but will try anyway")
         bootstrap_engine()
-        ok = install_for_platform(args.platform, update=args.update)
+        ok = install_for_platform(args.platform, update=args.update, hermes_profile=args.hermes_profile)
     else:
         bootstrap_engine()
         ok = True
         for p in platforms:
-            if not install_for_platform(p, update=args.update):
+            if not install_for_platform(p, update=args.update, hermes_profile=args.hermes_profile):
                 ok = False
 
     print("\n── Summary ──")

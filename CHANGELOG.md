@@ -45,6 +45,17 @@
 
 [下载 v1.2.1](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.2.1.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.2.1.tar.gz)
 
+## v1.3.2 — 2026.06.30
+
+- **修复 Hermes 多 Profile 插件安装路径**（#2 用户体验问题）
+  - 新增 `_detect_hermes_profile()`：自动检测活跃 Hermes profile
+  - 检测策略：`HERMES_PROFILE` 环境变量 → 单 profile 自动识别 → 全局兜底
+  - 新增 `--hermes-profile <name|global>` CLI 参数
+  - `_install_hermes()` 默认跟随 profile 目录而非写死全局路径
+  - 其他 6 个平台安装逻辑零改动
+
+[下载 v1.3.2](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.3.2.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.3.2.tar.gz)
+
 ## v1.3.1 — 2026.06.30
 
 - **修复 Hermes 插件安装兼容性**（#1 用户体验问题）
