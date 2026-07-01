@@ -1,10 +1,16 @@
 """
 中文关键词抽取 —— 移植自白龙马 memory/keywords.js（MIT）
 
-字符 n-gram + 停用词过滤。纯函数，零外部依赖。
+jieba 分词优先，n-gram 兜底。jieba 已列入 requirements.txt。
 """
 
 from collections import Counter
+
+try:
+    import jieba
+    _HAS_JIEBA = True
+except ImportError:
+    _HAS_JIEBA = False
 
 STOP_WORDS = {
     '的', '了', '是', '在', '我', '你', '他', '她', '它',
@@ -39,7 +45,6 @@ STOP_TAIL_CHARS = set('一几某每这那今')
 def _is_valid_ngram(word: str) -> bool:
     if not word or len(word) < 2 or word in STOP_WORDS:
         return False
-    # 2字噪声 n-gram
     if len(word) == 2 and word in STOP_NOISE_BIGRAMS:
         return False
     for ch in word:
@@ -49,7 +54,6 @@ def _is_valid_ngram(word: str) -> bool:
         return False
     if word[-1] in STOP_TAIL_CHARS:
         return False
-    # 重复字检测（超过2字的词）
     if len(word) > 2 and len(set(word)) < len(word):
         return False
     return True
@@ -58,16 +62,69 @@ def _is_valid_ngram(word: str) -> bool:
 def _length_weight(n: int) -> float:
     """焦点栈场景：长词 > 短词。3-4字词更有语义价值。"""
     if n == 2:
-        return 0.6  # 惩罚 2 字噪声碎片
+        return 0.6
     if n == 3:
-        return 1.5  # 鼓励 3 字词
+        return 1.5
     if n == 4:
-        return 2.0  # 奖励 4 字完整词
+        return 2.0
     return 1.0
+
+
+def _extract_ngram(text: str, max_keywords: int = 8) -> list[str]:
+    """字符 n-gram 兜底提取（jieba 不可用时）。"""
+    import re
+    freq = Counter()
+
+    chinese = re.sub(r'[a-zA-Z]+', ' ', text)
+    for i in range(len(chinese) - 1):
+        for ngram_len in range(2, min(5, len(chinese) - i + 1)):
+            word = chinese[i:i + ngram_len].strip()
+            if word and _is_valid_ngram(word):
+                freq[word] += 1
+
+    english_words = re.findall(r'[a-zA-Z]{3,}', text)
+    for w in english_words:
+        wl = w.lower()
+        if wl not in STOP_WORDS:
+            freq[w] += 2
+
+    scored = [(w, f * _length_weight(len(w))) for w, f in freq.items()]
+    scored.sort(key=lambda x: (-x[1], -len(x[0])))
+    return [w for w, _ in scored[:max_keywords]]
+
+
+def _extract_jieba(text: str, max_keywords: int = 8) -> list[str]:
+    """jieba 分词提取（主路径）。"""
+    import re
+    cleaned = re.sub(r'[，。！？、；：""''【】［］（）0-9]', ' ', text)
+    cleaned = re.sub(r'\\s+', ' ', cleaned).strip()
+    if not cleaned:
+        return []
+
+    words = [w.strip() for w in jieba.cut(cleaned) if w.strip()]
+    freq = Counter()
+
+    for w in words:
+        if not _is_valid_ngram(w):
+            continue
+        freq[w] += 1
+
+    # 英文词
+    english = re.findall(r'[a-zA-Z]{3,}', text)
+    for w in english:
+        wl = w.lower()
+        if wl not in STOP_WORDS:
+            freq[w] += 2
+
+    scored = [(w, f * _length_weight(len(w))) for w, f in freq.items()]
+    scored.sort(key=lambda x: (-x[1], -len(x[0])))
+    return [w for w, _ in scored[:max_keywords]]
 
 
 def extract_keywords(text: str, max_keywords: int = 8) -> list[str]:
     """从中文文本中提取关键词。
+
+    jieba 分词优先（requirements.txt 已声明），不可用时 n-gram 兜底。
 
     Args:
         text: 输入文本
@@ -79,31 +136,6 @@ def extract_keywords(text: str, max_keywords: int = 8) -> list[str]:
     if not text:
         return []
 
-    # 清理：去标点、数字
-    import re
-    cleaned = re.sub(r'[，。！？、；：""''【】［］（）0-9]', ' ', text)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    if not cleaned:
-        return []
-
-    freq = Counter()
-
-    # 中文 n-gram (2~4字)
-    chinese = re.sub(r'[a-zA-Z]+', ' ', cleaned)
-    for i in range(len(chinese) - 1):
-        for ngram_len in range(2, min(5, len(chinese) - i + 1)):
-            word = chinese[i:i + ngram_len].strip()
-            if word and _is_valid_ngram(word):
-                freq[word] += 1
-
-    # 英文词 (3字母+)，权重×2（避免被噪声 n-gram 挤压）
-    english_words = re.findall(r'[a-zA-Z]{3,}', text)
-    for w in english_words:
-        wl = w.lower()
-        if wl not in STOP_WORDS:
-            freq[w] += 2
-
-    # 排序：频率×长度权重
-    scored = [(w, f * _length_weight(len(w))) for w, f in freq.items()]
-    scored.sort(key=lambda x: (-x[1], -len(x[0])))
-    return [w for w, _ in scored[:max_keywords]]
+    if _HAS_JIEBA:
+        return _extract_jieba(text, max_keywords)
+    return _extract_ngram(text, max_keywords)

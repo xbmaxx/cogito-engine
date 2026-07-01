@@ -45,6 +45,12 @@
 
 [下载 v1.2.1](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.2.1.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.2.1.tar.gz)
 
+## v1.3.4 — 2026.06.30
+
+- **中文关键词提取改为 jieba 分词优先，n-gram 兜底。** jieba 已在 requirements.txt 中声明，此前 n-gram 做主路径是优先级倒挂。
+
+[下载 v1.3.4](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.3.4.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.3.4.tar.gz)
+
 ## v1.3.3 — 2026.06.30
 
 - **修复插件加载时 `import cogito_core` 失败的问题。** 插件目录不在 Python 搜索路径上，现已注入路径确保 Hermes 正常加载。
