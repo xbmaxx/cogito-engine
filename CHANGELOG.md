@@ -45,6 +45,14 @@
 
 [下载 v1.2.1](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.2.1.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.2.1.tar.gz)
 
+## v1.3.3 — 2026.06.30
+
+- **修复插件加载时 `import cogito_core` 失败的问题。** 插件目录不在 Python 搜索路径上，现已注入路径确保 Hermes 正常加载。
+- **新增 `requirements-dev.txt`**，声明 pytest 开发依赖，开发者 clone 后可直接运行测试。
+- **安装完成后提示可选依赖 SnowNLP**，装后可激活情绪感知功能。
+
+[下载 v1.3.3](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.3.3.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.3.3.tar.gz)
+
 ## v1.3.2 — 2026.06.30
 
 - **修复 Hermes 多 Profile 环境下插件安装到错误目录的问题。** 此前插件始终装到全局目录，在非默认 Profile 下无法被加载。现在会自动检测当前 Profile 并安装到对应目录。

@@ -360,6 +360,7 @@ Examples:
     print(f"{'✓ All done' if ok else '✗ Some steps failed'}")
     if ok and not args.dry_run:
         print("Restart your agent to activate Cogito Engine.")
+        print("\n💡 可选依赖：pip install snownlp 激活情绪感知功能")
 
     if not ok:
         sys.exit(1)
