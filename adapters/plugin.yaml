@@ -3,3 +3,6 @@ version: "1.3.4"
 description: "Cogito Engine – consciousness stream for Hermes Agent"
 author: "Cogito Engine"
 license: MIT
+hooks:
+  - pre_llm_call
+  - on_session_end
