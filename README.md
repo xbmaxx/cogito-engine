@@ -137,7 +137,6 @@ LLM Agent 默认没有连续性。每轮对话都是白纸一张。Cogito Engine
 
 - 不是可执行插件——是一份规格说明
 - 不绑定任何平台——Claude Code / Cursor / Gemini CLI / Hermes / 原生 LLM API 全支持
-- 不含语音能力——情绪感知只做文本分析
 - 环境不写死数据源——Agent 自行探测平台能提供什么
 - 感知层完全可选——核心层四件套够用就只要核心层
 
