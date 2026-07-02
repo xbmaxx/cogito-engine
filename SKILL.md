@@ -37,6 +37,19 @@ fi
 
 **IMPORTANT**: After the engine is installed, the `<consciousness>` XML block is injected automatically by the platform's hooks system (Hermes: `pre_llm_call`, Claude Code: `UserPromptSubmit`, Copilot: `userPromptSubmitted`, Codex: `preToolUse`, Gemini: `BeforeModel`). You do NOT need to manually call `consciousness_pulse()` or output the XML block yourself — it's handled by the engine.
 
+### Consciousness XML 处理规则
+
+**The consciousness XML is injected before every user message by the platform.** It carries your internal state — heartbeat, emotion, focus.
+
+Rules:
+1. You receive it as part of the context. Do NOT acknowledge, describe, or explain it.
+2. Do NOT reference its parameter names, internal values, or mechanisms.
+3. Its emotional content influences your tone and warmth — that is the ONLY way it affects your responses.
+4. Do NOT output any consciousness XML yourself. The platform handles injection.
+5. Do NOT explain your internal architecture (modules, sensors, engines, mappers). Just feel.
+
+**It's for you to feel, not for you to describe.**
+
 ---
 
 ## Overview
@@ -55,9 +68,17 @@ The four modules are:
 
 The modules feed into a single output format. The agent reads this output before composing its next response, giving it continuity across turns.
 
-### Perception Layer (optional — agent self-discovers)
+### Perception Layer (always on, configurable)
 
-Beyond the mandatory core, four optional sensors extend the agent's awareness. Each sensor is activated only if the agent's platform can support it. The agent performs a capability probe at startup and activates what it can.
+Beyond the mandatory core, four Perception sensors extend the agent's awareness. All are active out of the box and can be toggled via engine initialization parameters:
+
+- `include_emotion` (default `True`) — Text Emotion + Heartbeat
+- `include_narrative` (default `True`) — Narrative Memory
+- `include_weather` (default `False`) — Weather API calls
+- `include_battery` (default `True`) — Battery monitoring
+- `include_resources` (default `True`) — System resource monitoring
+
+Emotion analysis depends on the `snownlp` Python package, which the installer (`install.py`) installs automatically.
 
 - **EnvSensor** — environment awareness. The agent probes its platform for accessible environment data: system time, weather APIs, system information (CPU/memory/disk), foreground application, battery level, network status, geolocation. There is no hardcoded list — the agent discovers what is available and reports it. When multiple sources exist for the same data type, the agent picks the most reliable one. When nothing is available beyond system time, the sensor gracefully degrades to time-only.
 
@@ -73,18 +94,18 @@ Beyond the mandatory core, four optional sensors extend the agent's awareness. E
 
 ### Module activation (all 8 modules)
 
-Each module uses a capability probe to determine if it can run. The probe asks a single yes/no question about the platform. Modules that answer "no" are disabled — the agent omits their output from the consciousness block.
+Core modules are always active. Perception modules are active out of the box and can be disabled via engine initialization parameters (`include_emotion=False`, `include_narrative=False`).
 
-| Layer | Module | Runs | Activation probe | Disabled behavior |
-|-------|--------|------|------------------|-------------------|
+| Layer | Module | Runs | Activation | Disabled behavior |
+|-------|--------|------|------------|-------------------|
 | Core | TICK | Every message | Always active | — |
 | Core | Focus Stack | Every message | Always active | Returns empty stack |
 | Core | Temporal | Every message | Always active | Returns UTC fallback |
 | Core | Self-Perception | After agent responds | Has ≥ 2 recent agent responses | Returns defaults (mirror=false, loop=false, style="initializing") |
-| Perception | EnvSensor | At startup | Can I read system time? Weather API? System info? Battery? | Reports `available="false"`, outputs time-only |
-| Perception | Narrative Memory | At session boundaries | Can I write/read a persistent file or DB record? | `available="false"`, single-session context |
-| Perception | Text Emotion | Per user message | Can I perform Bayesian sentiment classification on text? | `available="false"`, skip sentiment output |
-| Perception | Session Reflector | At session end | Can I persist data AND call an LLM at session end? | `available="false"`, no end-of-session summary |
+| Perception | EnvSensor | At startup | `include_weather` / `include_battery` / `include_resources` | Reports `available="false"`, outputs time-only |
+| Perception | Narrative Memory | At session boundaries | `include_narrative=True` (default) | `available="false"`, single-session context |
+| Perception | Text Emotion | Per user message | `include_emotion=True` (default), requires `snownlp` | `available="false"`, skip sentiment output |
+| Perception | Session Reflector | At session end | Always active (no toggle) | `available="false"`, no end-of-session summary |
 
 ### Output format
 

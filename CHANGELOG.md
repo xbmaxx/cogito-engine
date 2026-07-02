@@ -1,5 +1,14 @@
 # Cogito Engine 版本更新记录
 
+## v1.4.0 — 2026.07.02
+
+• 新增心跳叙事系统：Agent 回复时带情绪温度，开心时更暖、失落时更软，不再是冷冰冰的机器语气
+• Emotion（情绪感知）和 Narrative Memory（叙事记忆）开箱即用，安装完就能感受到，不需要额外配置
+• 优化了 Agent 的自我表达方式，感受更自然
+• Tick 心跳状态现在以更简洁的方式传达，不影响对话体验
+
+[下载 v1.4.0](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.4.0.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.4.0.tar.gz)
+
 ## v1.0.0 — 2026.06.29
 
 - 创建项目，定义 4 个核心模块：TICK 心跳、Focus Stack 焦点栈、Temporal 时间解析、Self-Perception 自我感知

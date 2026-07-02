@@ -15,14 +15,14 @@ engine.py —— Cogito 意识引擎编排器。
 
 XML 输出格式严格遵循 spec：
 <consciousness>
-  <tick active="true|false" count="N" ttl="N" />
+  <tick beating="true|false" mode="custom|default" count="N" />
   <temporal iso="ISO8601" weekday="Monday|..." period="morning|afternoon|..." />
   <focus depth="N">
     <frame keywords="k1,k2,k3" source="user|agent" />
   </focus>
   <self mirror="true|false" loop="true|false" style_cluster="initializing|unchanged|narrow|diverse" />
   <env available="true|false"><source time="system" weather="api" ... /></env>
-  <emotion available="true|false" sentiment="positive|neutral|negative" polarity="0.0-1.0" confidence="0.0-1.0" label="正面|负面|中性" />
+  <emotion available="true|false" sentiment="positive|neutral|negative" label="正面|负面|中性" />
   <narrative available="true|false" unresolved_count="N" last_session="date" recurring_patterns="N" />
   <reflector available="true|false" />
   <focus_history>...</focus_history>
@@ -85,7 +85,6 @@ class EngineState:
             "focus_topics": self.focus_stack.get_topics(),
             "env_initialized": self.env_initialized,
             "last_message_count": self.last_message_count,
-            "is_first_message": self.is_first_message,
             "session_id": self.session_id,
         }
 
@@ -100,12 +99,21 @@ class EngineState:
         state = cls(session_id=session_id)
         if "last_message_count" in data:
             state.last_message_count = data["last_message_count"]
-        if "is_first_message" in data:
-            state.is_first_message = data["is_first_message"]
         return state
 
 
 # ── Cogito 意识引擎 ──
+
+_MODE_ICONS = {
+    "glowing": "💓",
+    "aching": "💔",
+    "resting": "🤍",
+    "frustrated": "⚡",
+    "confused": "🌫️",
+    "overwhelmed": "🌊",
+    "disconnected": "📡",
+}
+
 
 class CogitoEngine:
     """Cogito 意识引擎 —— 意识上下文生成的主编排器。
@@ -122,6 +130,8 @@ class CogitoEngine:
         include_weather: 是否包含天气信息
         include_battery: 是否包含电池信息
         include_resources: 是否包含系统资源信息
+        include_emotion: 是否启用情感分析（默认 True）
+        include_narrative: 是否启用叙事记忆（默认 True）
     """
 
     def __init__(
@@ -129,6 +139,8 @@ class CogitoEngine:
         include_weather: bool = False,
         include_battery: bool = True,
         include_resources: bool = True,
+        include_emotion: bool = True,
+        include_narrative: bool = True,
     ) -> None:
         self.emotion_detector = TextEmotionDetector(threshold=0.3)
         self.narrative_store = NarrativeStore()
@@ -136,6 +148,9 @@ class CogitoEngine:
         self.include_weather = include_weather
         self.include_battery = include_battery
         self.include_resources = include_resources
+        self.include_emotion = include_emotion
+        self.include_narrative = include_narrative
+        self._heartbeat_mapper = None   # 延迟加载，避免 import 失败阻断主链路
 
     def process(
         self,
@@ -222,7 +237,7 @@ class CogitoEngine:
 
         # ── 5. 情感分析 ──
         emo_result = None
-        if msg_text:
+        if msg_text and self.include_emotion:
             try:
                 emo_result = self.emotion_detector.detect(msg_text)
                 if emo_result.get("confidence", 0) <= 0.3:
@@ -231,9 +246,40 @@ class CogitoEngine:
             except Exception:
                 emo_result = quick_sentiment(msg_text)
 
+        # ── 5.5 心跳叙事（可选模块，v1.4 新增）──
+        heartbeat_line = None
+        if msg_text and sp_result is not None and emo_result is not None:
+            try:
+                from .heartbeat_mapper import HeartbeatMapper
+                if self._heartbeat_mapper is None:
+                    self._heartbeat_mapper = HeartbeatMapper()
+
+                mapper_result = self._heartbeat_mapper.map(
+                    text_emotion=emo_result,
+                    self_perception=sp_result,
+                    tick_count=state.ticker.tick_counter,
+                )
+
+                if mapper_result and mapper_result.get("mode") != "resting":
+                    mode = mapper_result["mode"]
+                    icon = _MODE_ICONS.get(mode, "💓")
+                    heartbeat_line = (
+                        f"{icon} 第{state.ticker.tick_counter}次 · "
+                        f"{mapper_result['expression']}"
+                    )
+                    # 模式切换时写快照
+                    if mapper_result.get("changed"):
+                        from .heartbeat_snapshot import save_snapshot
+                        save_snapshot(mapper_result)
+
+            except ImportError:
+                pass  # heartbeat_mapper.py 不存在 → 静默降级
+            except Exception as exc:
+                logger.warning("心跳叙事异常，降级到基础模式: %s", exc)
+
         # ── 6. 叙事记忆（首次消息时加载） ──
         narrative_data = None
-        if is_first:
+        if is_first and self.include_narrative:
             try:
                 narrative_data = self.narrative_store.load_recent(3)
             except Exception as exc:
@@ -265,6 +311,7 @@ class CogitoEngine:
             reflection_data=reflection_data,
             focus_history=focus_history,
             is_first=is_first,
+            heartbeat_line=heartbeat_line,
         )
 
         return xml, state
@@ -291,15 +338,12 @@ class CogitoEngine:
 
     def _minimal_context(self, state: EngineState) -> str:
         """生成最小上下文（无用户消息时）。"""
-        tick_status = state.ticker.get_status()
-        is_beating = state.ticker.tick_counter > 0 or tick_status["active"]
-        tick_mode = "custom" if tick_status["active"] else "default"
+        is_beating = state.ticker.tick_counter > 0
+        tick_mode = "default"
         parts = ["<consciousness>"]
         parts.append(
-            f'  <tick beating="{str(is_beating).lower()}" '
-            f'mode="{tick_mode}" '
-            f'count="{state.ticker.tick_counter}" '
-            f'ttl="{tick_status["ttl"]}" />'
+            f'  <tick beating="{str(is_beating).lower()}" mode="{tick_mode}" '
+            f'count="{state.ticker.tick_counter}" />'
         )
         parts.append(self._temporal_xml())
         parts.append(
@@ -341,19 +385,21 @@ class CogitoEngine:
         reflection_data: Optional[List[Dict[str, Any]]],
         focus_history: List[Dict[str, Any]],
         is_first: bool,
+        heartbeat_line: Optional[str] = None,
     ) -> str:
         """组装完整的 <consciousness> XML 块。"""
         parts = ["<consciousness>"]
 
+        # 心跳叙事首行（自然语言摘要，在 TICK 之前）
+        if heartbeat_line:
+            parts.append(f"  {heartbeat_line}")
+
         # ── TICK ──
-        tick_status = state.ticker.get_status()
-        is_beating = state.ticker.tick_counter > 0 or tick_status["active"]
-        tick_mode = "custom" if tick_status["active"] else "default"
+        is_beating = state.ticker.tick_counter > 0
+        tick_mode = "default"
         parts.append(
-            f'  <tick beating="{str(is_beating).lower()}" '
-            f'mode="{tick_mode}" '
-            f'count="{state.ticker.tick_counter}" '
-            f'ttl="{tick_status["ttl"]}" />'
+            f'  <tick beating="{str(is_beating).lower()}" mode="{tick_mode}" '
+            f'count="{state.ticker.tick_counter}" />'
         )
 
         # ── Temporal ──
@@ -410,14 +456,10 @@ class CogitoEngine:
         # ── Emotion ──
         if emo_result and emo_result.get("confidence", 0) > 0.3:
             sentiment = emo_result.get("label", "neutral")
-            polarity = emo_result.get("sentiment", 0.5)
-            confidence = emo_result.get("confidence", 0)
             label_cn = emo_result.get("label_cn", "中性")
             parts.append(
                 f'  <emotion available="true" '
                 f'sentiment="{sentiment}" '
-                f'polarity="{polarity}" '
-                f'confidence="{round(confidence, 4)}" '
                 f'label="{label_cn}" />'
             )
         else:

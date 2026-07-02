@@ -136,6 +136,31 @@ def detect_platform() -> List[str]:
 
 # ── install per-platform ───────────────────────────────────────────────────
 
+def install_dependencies() -> bool:
+    """安装 Python 依赖（snownlp 用于情感分析）。
+    
+    Returns:
+        True 表示成功或已安装，False 表示失败。
+    """
+    try:
+        import snownlp  # noqa: F401
+        return True  # 已安装
+    except ImportError:
+        pass
+    
+    # 尝试 pip install
+    cmd = [PYTHON, "-m", "pip", "install", "snownlp", "-q"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            return True
+        print(f"  ⚠ pip install snownlp 失败: {result.stderr.strip()[-120:]}")
+        return False
+    except Exception as exc:
+        print(f"  ⚠ pip install snownlp 异常: {exc}")
+        return False
+
+
 def install_for_platform(platform: str, update: bool = False, hermes_profile: Optional[str] = None) -> bool:
     """Install Cogito Engine hooks for a single platform.  Returns True on success."""
     print(f"\n── Installing for {platform} ──")
@@ -348,9 +373,11 @@ Examples:
         if args.platform not in platforms:
             print(f"⚠ '{args.platform}' not detected, but will try anyway")
         bootstrap_engine()
+        install_dependencies()
         ok = install_for_platform(args.platform, update=args.update, hermes_profile=args.hermes_profile)
     else:
         bootstrap_engine()
+        install_dependencies()
         ok = True
         for p in platforms:
             if not install_for_platform(p, update=args.update, hermes_profile=args.hermes_profile):
@@ -360,7 +387,6 @@ Examples:
     print(f"{'✓ All done' if ok else '✗ Some steps failed'}")
     if ok and not args.dry_run:
         print("Restart your agent to activate Cogito Engine.")
-        print("\n💡 可选依赖：pip install snownlp 激活情绪感知功能")
 
     if not ok:
         sys.exit(1)
