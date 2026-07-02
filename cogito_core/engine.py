@@ -85,6 +85,7 @@ class EngineState:
             "focus_topics": self.focus_stack.get_topics(),
             "env_initialized": self.env_initialized,
             "last_message_count": self.last_message_count,
+            "is_first_message": self.is_first_message,
             "session_id": self.session_id,
         }
 
@@ -99,6 +100,8 @@ class EngineState:
         state = cls(session_id=session_id)
         if "last_message_count" in data:
             state.last_message_count = data["last_message_count"]
+        if "is_first_message" in data:
+            state.is_first_message = data["is_first_message"]
         return state
 
 
@@ -289,9 +292,12 @@ class CogitoEngine:
     def _minimal_context(self, state: EngineState) -> str:
         """生成最小上下文（无用户消息时）。"""
         tick_status = state.ticker.get_status()
+        is_beating = state.ticker.tick_counter > 0 or tick_status["active"]
+        tick_mode = "custom" if tick_status["active"] else "default"
         parts = ["<consciousness>"]
         parts.append(
-            f'  <tick active="{str(tick_status["active"]).lower()}" '
+            f'  <tick beating="{str(is_beating).lower()}" '
+            f'mode="{tick_mode}" '
             f'count="{state.ticker.tick_counter}" '
             f'ttl="{tick_status["ttl"]}" />'
         )
@@ -341,8 +347,11 @@ class CogitoEngine:
 
         # ── TICK ──
         tick_status = state.ticker.get_status()
+        is_beating = state.ticker.tick_counter > 0 or tick_status["active"]
+        tick_mode = "custom" if tick_status["active"] else "default"
         parts.append(
-            f'  <tick active="{str(tick_status["active"]).lower()}" '
+            f'  <tick beating="{str(is_beating).lower()}" '
+            f'mode="{tick_mode}" '
             f'count="{state.ticker.tick_counter}" '
             f'ttl="{tick_status["ttl"]}" />'
         )
