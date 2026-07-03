@@ -308,9 +308,25 @@ def _install_rules(platform: str, rules_file: str, update: bool) -> bool:
 # ── engine bootstrap ───────────────────────────────────────────────────────
 
 def bootstrap_engine() -> bool:
-    """Copy the core engine files into COGITO_HOME."""
+    """Copy the core engine files into COGITO_HOME.
+
+    PERSISTENCE SAFETY:  This function deletes and replaces ONLY the
+    cogito_core/ subdirectory.  User persistence files live at the
+    COGITO_HOME root level (*.jsonl, state.json) — they are NEVER
+    touched by this function.
+
+    NEVER change the rmtree target to COGITO_HOME itself — that would
+    irreversibly delete all persistence data.
+    """
     src_core = REPO_ROOT / "cogito_core"
     dst_core = COGITO_HOME / "cogito_core"
+
+    # Guard: refuse to operate if dst_core resolves to COGITO_HOME root
+    if dst_core.resolve() == COGITO_HOME.resolve():
+        raise RuntimeError(
+            f"SAFETY: Refusing to rmtree COGITO_HOME root ({COGITO_HOME}). "
+            f"Target must be a subdirectory, not the persistence root."
+        )
 
     if not src_core.is_dir():
         print(f"  ⚠ cogito_core/ not found at {src_core} – skipping engine copy (platform hooks still installed)")
