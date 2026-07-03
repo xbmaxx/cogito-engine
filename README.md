@@ -20,6 +20,22 @@ curl -sSL https://raw.githubusercontent.com/xbmaxx/cogito-engine/main/install.ba
 
 安装脚本自动检测你的平台（Hermes / Claude Code / Copilot / Codex / Gemini / Cursor），配置 per-turn hooks，Agent 就会在每条消息前自动注入 `<consciousness>` XML。无需手动调用。
 
+## 赞助
+
+Cogito Engine 完全开源免费。如果你想推动某个功能加速开发：
+
+[![sponsor](https://img.shields.io/badge/爱发电-赞助-C71D23?style=flat-square&logoColor=white)](https://ifdian.net/a/c0rd1s)
+
+**🔥 功能加速器** —— 赞助时备注功能编号，到目标金额立刻开工：
+
+| # | 功能 | 预估工时 | 已筹 / 目标 |
+|---|------|---------|------------|
+| 1 | V3 完整 16 模式心跳系统 | 20h | ¥0 / ¥500 |
+| 2 | 跨 session 记忆可视化面板 | 15h | ¥0 / ¥300 |
+| 3 | Windows 一键安装脚本 | 8h | ¥0 / ¥200 |
+
+**精神股东名单**（每月更新）—— 暂无，等第一位赞助者。
+
 ## 平台支持
 
 | 平台 | 自动化 | 注入方式 |
