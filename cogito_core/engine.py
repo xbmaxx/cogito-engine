@@ -40,7 +40,7 @@ from .ticker import Ticker
 from .focus_stack import FocusStack
 from .temporal import get_period
 from .self_perception import compute_self_perception
-from .text_emotion import TextEmotionDetector, quick_sentiment
+from .text_emotion import quick_sentiment
 from .emotion_classifier import EmotionClassifier
 from .narrative_store import NarrativeStore
 from .session_reflector import SessionReflector
