@@ -22,7 +22,7 @@ class TextEmotionDetector:
         _threshold: 置信度阈值（低于此值视为中性）
     """
 
-    def __init__(self, threshold: float = 0.3) -> None:
+    def __init__(self, threshold: float = 0.15) -> None:
         self._threshold = threshold
         self._snownlp = None
 

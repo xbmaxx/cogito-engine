@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+import re
 
 from .ticker import Ticker
 from .focus_stack import FocusStack
@@ -43,8 +44,14 @@ from .text_emotion import TextEmotionDetector, quick_sentiment
 from .narrative_store import NarrativeStore
 from .session_reflector import SessionReflector
 from . import persistence
+from .context_window import HierarchicalContextBuilder, ContextInput
 
 logger = logging.getLogger(__name__)
+
+
+def _has_ascii_word(text: str) -> bool:
+    """检测文本是否包含英文技术词汇（≥2字母），用于触发情绪交叉验证。"""
+    return bool(re.search(r'\b[a-zA-Z]{2,}\b', text))
 
 
 # ── 引擎状态类型 ──
@@ -142,7 +149,7 @@ class CogitoEngine:
         include_emotion: bool = True,
         include_narrative: bool = True,
     ) -> None:
-        self.emotion_detector = TextEmotionDetector(threshold=0.3)
+        self.emotion_detector = TextEmotionDetector(threshold=0.15)
         self.narrative_store = NarrativeStore()
         self.session_reflector = SessionReflector()
         self.include_weather = include_weather
@@ -240,14 +247,36 @@ class CogitoEngine:
         if msg_text and self.include_emotion:
             try:
                 emo_result = self.emotion_detector.detect(msg_text)
-                if emo_result.get("confidence", 0) <= 0.3:
-                    # 尝试回退到关键词检测
+                conf = emo_result.get("confidence", 0)
+                if conf <= 0.15:
+                    # 低置信度 → 回退到关键词检测
                     emo_result = quick_sentiment(msg_text)
+                elif conf > 0.15 and _has_ascii_word(msg_text):
+                    # 含英文词 → 交叉验证：SnowNLP 可能对工具/代码文本误判
+                    qs = quick_sentiment(msg_text)
+                    if qs.get("confidence", 0) == 0.0:
+                        # 关键词检测无情绪信号 → 归为中性
+                        emo_result = qs
             except Exception:
                 emo_result = quick_sentiment(msg_text)
 
+        # ── 5a. 情感持久化（v1.5.9）──
+        if emo_result:
+            try:
+                persistence.save_emotion_history(
+                    label=emo_result.get("label", "neutral"),
+                    sentiment=float(emo_result.get("sentiment", 0.5)),
+                    confidence=float(emo_result.get("confidence", 0.0)),
+                    label_cn=emo_result.get("label_cn", "中性"),
+                    text_excerpt=msg_text,
+                )
+            except Exception:
+                pass
+
         # ── 5.5 心跳叙事（可选模块，v1.4 新增）──
         heartbeat_line = None
+        heartbeat_mode = ""
+        heartbeat_expression = ""
         if msg_text and sp_result is not None and emo_result is not None:
             try:
                 from .heartbeat_mapper import HeartbeatMapper
@@ -259,6 +288,9 @@ class CogitoEngine:
                     self_perception=sp_result,
                     tick_count=state.ticker.tick_counter,
                 )
+
+                heartbeat_mode = mapper_result.get("mode", "")
+                heartbeat_expression = mapper_result.get("expression", "")
 
                 if mapper_result and mapper_result.get("mode") != "resting":
                     mode = mapper_result["mode"]
@@ -312,6 +344,8 @@ class CogitoEngine:
             focus_history=focus_history,
             is_first=is_first,
             heartbeat_line=heartbeat_line,
+            heartbeat_mode=heartbeat_mode,
+            heartbeat_expression=heartbeat_expression,
         )
 
         return xml, state
@@ -337,28 +371,8 @@ class CogitoEngine:
         return -1
 
     def _minimal_context(self, state: EngineState) -> str:
-        """生成最小上下文（无用户消息时）。"""
-        is_beating = state.ticker.tick_counter > 0
-        tick_mode = "default"
-        parts = ["<consciousness>"]
-        parts.append(
-            f'  <tick beating="{str(is_beating).lower()}" mode="{tick_mode}" '
-            f'count="{state.ticker.tick_counter}" />'
-        )
-        parts.append(self._temporal_xml())
-        parts.append(
-            f'  <focus depth="{state.focus_stack.depth}" />'
-        )
-        parts.append(
-            '  <self mirror="false" loop="false" '
-            'style_cluster="initializing" />'
-        )
-        parts.append('  <env available="false" />')
-        parts.append('  <emotion available="false" />')
-        parts.append('  <narrative available="false" />')
-        parts.append('  <reflector available="false" />')
-        parts.append("</consciousness>")
-        return "\n".join(parts)
+        """生成最小上下文（无用户消息时）——三层格式。"""
+        return "<consciousness>\n</consciousness>"
 
     def _temporal_xml(self) -> str:
         """生成 temporal XML 元素。"""
@@ -375,6 +389,29 @@ class CogitoEngine:
             f'weekday="{weekday}" period="{period}" />'
         )
 
+    # ── 情绪趋势（v1.5.9，P1.5）──
+
+    def _compute_emotion_trend(self) -> str:
+        """从 emotion_history.jsonl 最近 3 条判情绪趋势方向。
+
+        Returns:
+            "上升" / "下降" / "平稳" / ""（数据不足 3 条）
+        """
+        entries = persistence.load_emotion_history(3)
+        if len(entries) < 3:
+            return ""
+
+        sentiments = [float(e.get("sentiment", 0.5)) for e in entries]
+        # 连续比较：全递增 → 上升，全递减 → 下降，否则平稳
+        inc = all(sentiments[i] < sentiments[i + 1] for i in range(len(sentiments) - 1))
+        dec = all(sentiments[i] > sentiments[i + 1] for i in range(len(sentiments) - 1))
+
+        if inc:
+            return "上升"
+        if dec:
+            return "下降"
+        return "平稳"
+
     def _assemble_xml(
         self,
         state: EngineState,
@@ -386,136 +423,55 @@ class CogitoEngine:
         focus_history: List[Dict[str, Any]],
         is_first: bool,
         heartbeat_line: Optional[str] = None,
+        heartbeat_mode: str = "",
+        heartbeat_expression: str = "",
     ) -> str:
-        """组装完整的 <consciousness> XML 块。"""
-        parts = ["<consciousness>"]
+        """组装完整的 <consciousness> XML 块（三层结构）。
 
-        # 心跳叙事首行（自然语言摘要，在 TICK 之前）
-        if heartbeat_line:
-            parts.append(f"  {heartbeat_line}")
+        委托给 HierarchicalContextBuilder，将平铺的 consciousness 数据
+        按 LLM 注意力规律重组为 immediate / working / background 三层。
+        """
+        builder = HierarchicalContextBuilder()
 
-        # ── TICK ──
-        is_beating = state.ticker.tick_counter > 0
-        tick_mode = "default"
-        parts.append(
-            f'  <tick beating="{str(is_beating).lower()}" mode="{tick_mode}" '
-            f'count="{state.ticker.tick_counter}" />'
-        )
-
-        # ── Temporal ──
-        parts.append(self._temporal_xml())
-
-        # ── Focus Stack ──
-        if state.focus_stack.stack:
-            depth = state.focus_stack.depth
-            parts.append(f'  <focus depth="{depth}">')
-            for frame in state.focus_stack.stack:
-                keywords = ", ".join(frame["topic"])
-                safe_kw = keywords.replace('"', "'")
-                source = frame.get("source", "user")
-                parts.append(
-                    f'    <frame keywords="{safe_kw}" source="{source}" />'
-                )
-            parts.append("  </focus>")
-        else:
-            parts.append('  <focus depth="0" />')
-
-        # ── Self-Perception ──
-        mirror_flag = "false"
-        loop_flag = "false"
-        style_cluster = "initializing"
-
-        if sp_result:
-            mirror_data = sp_result.get("mirror", {})
-            if mirror_data:
-                m_score = mirror_data.get("score", 0)
-                if m_score >= 0.4:
-                    mirror_flag = "true"
-            loop_depth = sp_result.get("loop", 0)
-            if isinstance(loop_depth, (int, float)) and loop_depth >= 2:
-                loop_flag = "true"
-            style_cluster = sp_result.get("style_cluster", "unchanged")
-
-        parts.append(
-            f'  <self mirror="{mirror_flag}" '
-            f'loop="{loop_flag}" '
-            f'style_cluster="{style_cluster}" />'
-        )
-
-        # ── Env ──
-        if env_snap:
-            parts.append('  <env available="true">')
-            parts.append(
-                '    <source time="system" weather="api" '
-                'system_info="shell" foreground_app="ax" battery="iokit" />'
-            )
-            parts.append("  </env>")
-        else:
-            parts.append('  <env available="false" />')
-
-        # ── Emotion ──
-        if emo_result and emo_result.get("confidence", 0) > 0.3:
-            sentiment = emo_result.get("label", "neutral")
-            label_cn = emo_result.get("label_cn", "中性")
-            parts.append(
-                f'  <emotion available="true" '
-                f'sentiment="{sentiment}" '
-                f'label="{label_cn}" />'
-            )
-        else:
-            parts.append('  <emotion available="false" />')
-
-        # ── Narrative ──
+        # ── 提取叙事数据 ──
+        last_summary = ""
+        unresolved: List[str] = []
         if narrative_data and is_first:
-            unresolved_count = sum(
-                1 for n in narrative_data
-                if n.get("unresolved") and n.get("unresolved") != "无"
-            )
-            recurring = min(len(narrative_data), 5)
-            last_session = ""
-            if narrative_data:
-                ts = narrative_data[0].get("timestamp", "")
-                if ts:
-                    try:
-                        dt = datetime.fromisoformat(ts)
-                        last_session = dt.strftime("%Y-%m-%d")
-                    except (ValueError, TypeError):
-                        pass
-            parts.append(
-                f'  <narrative available="true" '
-                f'unresolved_count="{unresolved_count}" '
-                f'last_session="{last_session}" '
-                f'recurring_patterns="{recurring}" />'
-            )
-        else:
-            parts.append('  <narrative available="false" />')
+            first_entry = narrative_data[0] if narrative_data else {}
+            last_summary = first_entry.get("summary", "")
+            for n in narrative_data:
+                u = n.get("unresolved", "")
+                if u and u != "无":
+                    unresolved.append(u)
 
-        # ── Reflector ──
-        if reflection_data and is_first:
-            last_rf = reflection_data[-1] if reflection_data else {}
-            trigger = last_rf.get("trigger", "inactivity")
-            ts = last_rf.get("ts", "")
-            parts.append(
-                f'  <reflector available="true" '
-                f'trigger="{trigger}" last_reflection="{ts}" />'
-            )
-        else:
-            parts.append('  <reflector available="false" />')
+        # ── 提取情感数据 ──
+        emo_label = ""
+        emo_polarity = 0.0
+        emo_confidence = 0.0
+        if emo_result:
+            emo_label = emo_result.get("label_cn", emo_result.get("label", ""))
+            emo_polarity = float(emo_result.get("polarity", emo_result.get("sentiment", 0.0)))
+            emo_confidence = float(emo_result.get("confidence", 0.0))
 
-        # ── Focus History ──
-        if focus_history and is_first:
-            parts.append("  <focus_history>")
-            for entry in reversed(focus_history):
-                topics = "; ".join(entry.get("topics", []))
-                if topics:
-                    safe = topics.replace('"', "'")
-                    parts.append(
-                        f'    <past topics="{safe}" />'
-                    )
-            parts.append("  </focus_history>")
+        # ── 构建 ContextInput ──
+        inp = ContextInput(
+            heartbeat_mode=heartbeat_mode,
+            heartbeat_expression=heartbeat_expression,
+            emotion_label=emo_label,
+            emotion_polarity=emo_polarity,
+            emotion_confidence=emo_confidence,
+            emotion_trend=self._compute_emotion_trend(),
+            focus_frames=state.focus_stack.stack,
+            last_session_summary=last_summary,
+            unresolved_topics=unresolved,
+            cross_session_patterns=[],   # P2: 跨会话模式补齐
+            relationship_days=0,         # P1.5: 关系纪元
+            weather="",                  # P1.5: 环境传感器重构
+            location="",
+            tick_count=state.ticker.tick_counter,
+        )
 
-        parts.append("</consciousness>")
-        return "\n".join(parts)
+        return builder.assemble_xml(inp)
 
     # ── 会话生命周期 ──
 
@@ -566,6 +522,24 @@ class CogitoEngine:
                 )
             except Exception as exc:
                 logger.error("会话反射生成失败: %s", exc)
+
+        # 保存叙事记忆（narrative_store.append 写 narrative.jsonl）
+        try:
+            if state.focus_stack.stack:
+                topics = [
+                    ", ".join(f["topic"]) for f in state.focus_stack.stack
+                ]
+                narrative_summary = focus_summary or (" | ".join(topics))
+                self.narrative_store.append(
+                    summary=narrative_summary,
+                    insights="",
+                    unresolved="",
+                    focus_topics=topics,
+                    emotion_summary="",
+                    session_id=state.session_id,
+                )
+        except Exception as exc:
+            logger.error("保存叙事记忆失败: %s", exc)
 
     # ── 关键词提取模块（可选依赖） ──
 
