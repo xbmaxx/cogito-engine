@@ -12,7 +12,7 @@ try:
 except ImportError:
     _HAS_JIEBA = False
 
-STOP_WORDS = {
+STOP_WORDS_CN = {
     '的', '了', '是', '在', '我', '你', '他', '她', '它',
     '我们', '你们', '他们', '这', '那', '有', '没有',
     '和', '与', '把', '被', '因为', '所以', '如果',
@@ -21,6 +21,33 @@ STOP_WORDS = {
     '今天', '昨天', '前天', '大前天',
     '今早', '今晨', '今夜', '今晚', '昨晚', '昨夜', '昨日', '今日',
 }
+
+# 英文停用词 —— 工具对话中高频出现但不携带主题信息的英文词
+STOP_WORDS_EN = frozenset({
+    'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+    'can', 'could', 'may', 'might', 'shall', 'should', 'must',
+    'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him',
+    'her', 'us', 'them', 'my', 'your', 'his', 'its', 'our',
+    'their', 'mine', 'yours', 'hers', 'ours', 'theirs',
+    'this', 'that', 'these', 'those', 'here', 'there',
+    'what', 'which', 'who', 'whom', 'when', 'where', 'why', 'how',
+    'all', 'both', 'each', 'every', 'few', 'more', 'most',
+    'other', 'some', 'such', 'no', 'nor', 'not', 'only',
+    'own', 'same', 'so', 'than', 'too', 'very', 'just',
+    'and', 'but', 'or', 'if', 'because', 'as', 'until',
+    'while', 'of', 'at', 'by', 'for', 'with', 'about',
+    'between', 'into', 'through', 'during', 'before', 'after',
+    'above', 'below', 'to', 'from', 'in', 'out', 'on', 'off',
+    'over', 'under', 'again', 'further', 'then', 'once',
+    'also', 'any', 'each', 'even', 'ever', 'now', 'still',
+    'yet', 'already', 'always', 'never', 'often', 'really',
+    'very', 'much', 'many', 'well', 'back', 'down', 'up',
+    'name', 'task', 'skill',  # 工具对话高频噪音词
+})
+
+# 向后兼容别名
+STOP_WORDS = STOP_WORDS_CN
 
 # 高频 2字噪声 n-gram —— 在几乎任何上下文中都不携带主题信息。
 # 这是 n-gram 抽取最常被挤占 top-3 的元凶。
@@ -45,6 +72,8 @@ STOP_TAIL_CHARS = set('一几某每这那今')
 def _is_valid_ngram(word: str) -> bool:
     if not word or len(word) < 2 or word in STOP_WORDS:
         return False
+    if word.lower() in STOP_WORDS_EN:
+        return False
     if len(word) == 2 and word in STOP_NOISE_BIGRAMS:
         return False
     for ch in word:
@@ -54,7 +83,8 @@ def _is_valid_ngram(word: str) -> bool:
         return False
     if word[-1] in STOP_TAIL_CHARS:
         return False
-    if len(word) > 2 and len(set(word)) < len(word):
+    if len(word) > 2 and len(set(word)) < len(word) and not word.isascii():
+        # 纯中文重复字符（"哈哈哈"）→ 过滤；英文 "hook"/"look" 等不在此列
         return False
     return True
 
@@ -85,7 +115,7 @@ def _extract_ngram(text: str, max_keywords: int = 8) -> list[str]:
     english_words = re.findall(r'[a-zA-Z]{3,}', text)
     for w in english_words:
         wl = w.lower()
-        if wl not in STOP_WORDS:
+        if wl not in STOP_WORDS_EN:
             freq[w] += 2
 
     scored = [(w, f * _length_weight(len(w))) for w, f in freq.items()]
@@ -113,7 +143,7 @@ def _extract_jieba(text: str, max_keywords: int = 8) -> list[str]:
     english = re.findall(r'[a-zA-Z]{3,}', text)
     for w in english:
         wl = w.lower()
-        if wl not in STOP_WORDS:
+        if wl not in STOP_WORDS_EN:
             freq[w] += 2
 
     scored = [(w, f * _length_weight(len(w))) for w, f in freq.items()]
