@@ -17,6 +17,7 @@ hermes_adapter.py —— Hermes Plugin 适配器。
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from cogito_core.engine import CogitoEngine, EngineState
@@ -28,28 +29,26 @@ logger = logging.getLogger(__name__)
 
 
 class HermesAdapter:
-    """Hermes Plugin 适配器。
-
-    生命周期：
-        1. Hermes 加载插件 → register(ctx) 被调用
-        2. 每次 LLM 调用前 → _pre_llm_call(**kwargs) 被调用
-        3. 会话结束时 → _on_session_end(**kwargs) 被调用
-
-    Hook 签名说明：
-        Hermes 运行时通过 cb(**kwargs) 调用所有 hook 回调，
-        传入的参数包括：session_id, task_id, turn_id, user_message,
-        conversation_history, is_first_turn 等。
-        详见 agent/turn_context.py 中 invoke_hook("pre_llm_call", ...) 的调用处。
-    """
+    """Hermes Plugin 适配器。"""
 
     def __init__(
         self,
-        include_weather: bool = False,
+        include_weather: bool = True,
         include_battery: bool = True,
         include_resources: bool = True,
         include_emotion: bool = True,
         include_narrative: bool = True,
     ) -> None:
+        # 将持久化路径重定向到 Hermes 的 memory 目录
+        from cogito_core.persistence import set_cogito_home as _set_ph
+        _set_ph(str(Path.home() / ".hermes" / "memory"))
+
+        from cogito_core import narrative_store as _ns
+        _ns.set_cogito_home(str(Path.home() / ".hermes" / "memory"))
+
+        import cogito_core.session_reflector as _sr
+        _sr._COGITO_HOME = Path.home() / ".hermes" / "memory"
+
         self.engine = CogitoEngine(
             include_weather=include_weather,
             include_battery=include_battery,
@@ -145,13 +144,24 @@ class HermesAdapter:
             if state is None:
                 state = EngineState(session_id=session_id)
 
-            # 生成焦点摘要（从焦点栈中提取）
+            # 生成焦点摘要（从焦点栈中提取，自然语言模板）
             focus_summary = ""
             if state.focus_stack.stack:
-                topics = [
-                    ", ".join(f["topic"]) for f in state.focus_stack.stack
-                ]
-                focus_summary = " | ".join(topics)
+                all_keywords = []
+                for f in state.focus_stack.stack:
+                    all_keywords.extend(f["topic"])
+                # 去重保留顺序，取前 5 个
+                seen = set()
+                unique = []
+                for kw in all_keywords:
+                    if kw not in seen:
+                        seen.add(kw)
+                        unique.append(kw)
+                        if len(unique) >= 5:
+                            break
+                focus_summary = "讨论了" + "、".join(unique)
+                if len(all_keywords) > 5:
+                    focus_summary += "等话题"
 
             # 执行收尾
             self.engine.end_session(

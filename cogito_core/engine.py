@@ -41,6 +41,7 @@ from .focus_stack import FocusStack
 from .temporal import get_period
 from .self_perception import compute_self_perception
 from .text_emotion import TextEmotionDetector, quick_sentiment
+from .emotion_classifier import EmotionClassifier
 from .narrative_store import NarrativeStore
 from .session_reflector import SessionReflector
 from . import persistence
@@ -149,7 +150,7 @@ class CogitoEngine:
         include_emotion: bool = True,
         include_narrative: bool = True,
     ) -> None:
-        self.emotion_detector = TextEmotionDetector(threshold=0.3)
+        self.emotion_detector = EmotionClassifier()
         self.narrative_store = NarrativeStore()
         self.session_reflector = SessionReflector()
         self.include_weather = include_weather
@@ -248,10 +249,10 @@ class CogitoEngine:
             try:
                 emo_result = self.emotion_detector.detect(msg_text)
                 conf = emo_result.get("confidence", 0)
-                if conf <= 0.3:
+                if conf <= 0.15:
                     # 低置信度 → 回退到关键词检测
                     emo_result = quick_sentiment(msg_text)
-                elif conf > 0.3 and _has_ascii_word(msg_text):
+                elif conf > 0.15 and _has_ascii_word(msg_text):
                     # 含英文词 → 交叉验证：SnowNLP 可能对工具/代码文本误判
                     qs = quick_sentiment(msg_text)
                     if qs.get("confidence", 0) == 0.0:
@@ -522,6 +523,37 @@ class CogitoEngine:
                 )
             except Exception as exc:
                 logger.error("会话反射生成失败: %s", exc)
+
+        # 保存叙事记忆（narrative_store.append 写 narrative.jsonl）
+        try:
+            if state.focus_stack.stack:
+                all_keywords = []
+                for f in state.focus_stack.stack:
+                    all_keywords.extend(f["topic"])
+                seen = set()
+                unique = []
+                for kw in all_keywords:
+                    if kw not in seen:
+                        seen.add(kw)
+                        unique.append(kw)
+                        if len(unique) >= 5:
+                            break
+                if focus_summary:
+                    narrative_summary = focus_summary
+                else:
+                    narrative_summary = "讨论了" + "、".join(unique)
+                    if len(all_keywords) > 5:
+                        narrative_summary += "等话题"
+                self.narrative_store.append(
+                    summary=narrative_summary,
+                    insights="",
+                    unresolved="",
+                    focus_topics=unique,
+                    emotion_summary="",
+                    session_id=state.session_id,
+                )
+        except Exception as exc:
+            logger.error("保存叙事记忆失败: %s", exc)
 
     # ── 关键词提取模块（可选依赖） ──
 
