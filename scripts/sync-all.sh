@@ -18,6 +18,7 @@ FILES=(
 )
 
 echo "Syncing repo → runtime..."
+mkdir -p "$COGITO_CORE" "$PLUGIN_DIR" "$SKILL_CORE"
 
 for f in "${FILES[@]}"; do
     [ -f "$REPO_CORE/$f" ] || continue
