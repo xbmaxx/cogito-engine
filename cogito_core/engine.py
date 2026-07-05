@@ -152,7 +152,11 @@ class CogitoEngine:
         include_narrative: bool = True,
         reflection_llm: Optional[Callable[[str], str]] = None,
     ) -> None:
-        self.emotion_detector = EmotionClassifier()
+        try:
+            self.emotion_detector = EmotionClassifier()
+        except Exception as exc:
+            logger.warning("EmotionClassifier 初始化失败 (%s)，情绪感知不可用", exc)
+            self.emotion_detector = None
         self.narrative_store = NarrativeStore()
         self.session_reflector = SessionReflector()
         self.include_weather = include_weather
@@ -248,7 +252,7 @@ class CogitoEngine:
 
         # ── 5. 情感分析 ──
         emo_result = None
-        if msg_text and self.include_emotion:
+        if msg_text and self.include_emotion and self.emotion_detector is not None:
             try:
                 emo_result = self.emotion_detector.detect(msg_text)
                 dominant = emo_result.get("dominant", "none")

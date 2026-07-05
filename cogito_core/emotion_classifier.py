@@ -34,12 +34,31 @@ class EmotionClassifier:
     """
 
     def __init__(self, dict_path: Optional[str] = None) -> None:
+        self._available = False
         if dict_path is None:
             dict_path = str(
                 Path(__file__).parent / "data" / "emotion_dict.json"
             )
 
-        raw = json.loads(Path(dict_path).read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(Path(dict_path).read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+            logger.warning(
+                "EmotionClassifier 字典加载失败 (%s)，情绪感知降级为始终中性", exc
+            )
+            # 设置空默认值，让 classify() 返回中性结果
+            self.negation_words: set = set()
+            self.degree_words: Dict[str, list] = {}
+            self.emotion_dict: dict = {}
+            self.negation_window = 3
+            self.degree_weights = {
+                "extreme": 3.0, "high": 1.8, "medium": 1.2,
+                "low": 0.8, "default": 1.0,
+            }
+            self._opposites = {}
+            return
+
+        self._available = True
 
         self.negation_words: set = set(raw.pop("__NEGATION__", []))
         self.degree_words: Dict[str, list] = raw.pop("__DEGREE__", {})
@@ -62,6 +81,10 @@ class EmotionClassifier:
             "怒": "好", "惧": "乐", "恶": "好", "惊": "惧",
         }
 
+    def is_available(self) -> bool:
+        """字典是否成功加载。"""
+        return self._available
+
     def classify(self, text: str) -> Dict[str, Any]:
         """返回七维情绪向量。
 
@@ -77,6 +100,14 @@ class EmotionClassifier:
                 "method": "dutir_weighted",
             }
         """
+        if not self._available:
+            return {
+                "available": False,
+                "emotions": {},
+                "dominant": "none",
+                "confidence": 0.0,
+                "method": "dutir_unavailable",
+            }
         try:
             import jieba
         except ImportError:
