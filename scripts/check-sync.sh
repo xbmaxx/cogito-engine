@@ -77,13 +77,23 @@ if [ -f "$repo_data" ]; then
     done
 fi
 
-# 检查 SKILL.md frontmatter version vs version.txt
+# 检查三处版本号一致性：version.txt / SKILL.md / plugin.yaml
 VERSION_TXT=$(cat "$REPO_CORE/version.txt" 2>/dev/null || echo "unknown")
+
 SKILL_MD="$REPO_DIR/SKILL.md"
 if [ -f "$SKILL_MD" ]; then
     SKILL_VERSION=$(grep "^version:" "$SKILL_MD" | head -1 | sed 's/version: *//')
     if [ "$SKILL_VERSION" != "$VERSION_TXT" ]; then
         echo -e "${RED}✗ VERSION MISMATCH${NC} SKILL.md=$SKILL_VERSION ≠ version.txt=$VERSION_TXT"
+        MISMATCH=1
+    fi
+fi
+
+PLUGIN_YAML="$REPO_DIR/adapters/plugin.yaml"
+if [ -f "$PLUGIN_YAML" ]; then
+    PLUGIN_VERSION=$(grep "^version:" "$PLUGIN_YAML" | head -1 | sed 's/version: *"//' | sed 's/"//')
+    if [ "$PLUGIN_VERSION" != "$VERSION_TXT" ]; then
+        echo -e "${RED}✗ VERSION MISMATCH${NC} plugin.yaml=$PLUGIN_VERSION ≠ version.txt=$VERSION_TXT"
         MISMATCH=1
     fi
 fi
