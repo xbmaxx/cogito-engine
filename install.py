@@ -336,6 +336,15 @@ def bootstrap_engine() -> bool:
         shutil.rmtree(dst_core)
     shutil.copytree(src_core, dst_core)
     print(f"  ✓ engine bootstrapped → {dst_core}")
+
+    # 安装后自检：data/emotion_dict.json 是否存在
+    dict_path = dst_core / "data" / "emotion_dict.json"
+    if dict_path.is_file():
+        size_kb = dict_path.stat().st_size / 1024
+        print(f"  ✓ 情绪词典已安装 ({size_kb:.0f} KB)")
+    else:
+        print(f"  ⚠ 情绪词典缺失 — 七维情绪将降级为中性，请确认 {src_core}/data/emotion_dict.json 存在")
+
     return True
 
 
