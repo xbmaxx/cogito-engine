@@ -38,12 +38,19 @@ import argparse
 from typing import Any, Dict, List, Optional, Tuple
 
 # 确保能找到 cogito_core
-sys.path.insert(
-    0,
-    os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..")
-    ),
-)
+# 尝试多个路径：repo 同级目录 > 用户运行时目录 > 当前目录
+_cogito_paths = [
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+    os.path.expanduser("~/.cogito"),
+    os.path.expanduser("~/.hermes/plugins/hermes_consciousness"),
+]
+for _p in _cogito_paths:
+    if os.path.isdir(os.path.join(_p, "cogito_core")):
+        sys.path.insert(0, _p)
+        break
+else:
+    # 最后兜底：当前工作目录
+    sys.path.insert(0, os.getcwd())
 
 from cogito_core.engine import CogitoEngine, EngineState
 
