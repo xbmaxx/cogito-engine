@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import re
 
 from .ticker import Ticker
@@ -46,6 +46,7 @@ from .narrative_store import NarrativeStore
 from .session_reflector import SessionReflector
 from . import persistence
 from .context_window import HierarchicalContextBuilder, ContextInput
+from .env_sensor import get_location, get_weather
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,7 @@ class CogitoEngine:
         include_resources: bool = True,
         include_emotion: bool = True,
         include_narrative: bool = True,
+        reflection_llm: Optional[Callable[[str], str]] = None,
     ) -> None:
         self.emotion_detector = EmotionClassifier()
         self.narrative_store = NarrativeStore()
@@ -159,6 +161,7 @@ class CogitoEngine:
         self.include_emotion = include_emotion
         self.include_narrative = include_narrative
         self._heartbeat_mapper = None   # 延迟加载，避免 import 失败阻断主链路
+        self._reflection_llm = reflection_llm  # deferred reflection LLM 函数
 
     def process(
         self,
@@ -248,11 +251,22 @@ class CogitoEngine:
         if msg_text and self.include_emotion:
             try:
                 emo_result = self.emotion_detector.detect(msg_text)
-                conf = emo_result.get("confidence", 0)
-                if conf <= 0.15:
-                    # 低置信度 → 回退到关键词检测
-                    emo_result = quick_sentiment(msg_text)
-                elif conf > 0.15 and _has_ascii_word(msg_text):
+                dominant = emo_result.get("dominant", "none")
+                if dominant == "none":
+                    # DUTIR 无情绪信号 → 用 quick_sentiment 兜底判极性
+                    qs = quick_sentiment(msg_text)
+                    emo_result = {
+                        "available": True,
+                        "emotions": {"好": 0, "乐": 0, "哀": 0, "怒": 0, "惧": 0, "恶": 0, "惊": 0},
+                        "dominant": "none",
+                        "confidence": 0.0,
+                        "method": "dutir_fallback_quick_sentiment",
+                        "label": qs.get("label", "neutral"),
+                        "label_cn": qs.get("label_cn", "中性"),
+                        "sentiment": qs.get("sentiment", 0.5),
+                        "polarity": qs.get("polarity", 0.5),
+                    }
+                elif dominant != "none" and _has_ascii_word(msg_text):
                     # 含英文词 → 交叉验证：SnowNLP 可能对工具/代码文本误判
                     qs = quick_sentiment(msg_text)
                     if qs.get("confidence", 0) == 0.0:
@@ -310,9 +324,23 @@ class CogitoEngine:
             except Exception as exc:
                 logger.warning("心跳叙事异常，降级到基础模式: %s", exc)
 
-        # ── 6. 叙事记忆（首次消息时加载） ──
+        # ── 6. Deferred Reflection（首次消息时，处理上一 session 的 pending 条目）──
         narrative_data = None
-        if is_first and self.include_narrative:
+        narrative_data_loaded = False
+        if is_first and self.include_narrative and self._reflection_llm:
+            try:
+                self._run_deferred_reflection()
+            except Exception as exc:
+                logger.debug("延迟反射执行失败: %s", exc)
+            # 重新加载叙事数据（可能已被 deferred reflection 更新）
+            try:
+                narrative_data = self.narrative_store.load_recent(3)
+                narrative_data_loaded = True
+            except Exception:
+                pass
+
+        # ── 6a. 叙事记忆（首次消息时加载）──
+        if not narrative_data_loaded and is_first and self.include_narrative:
             try:
                 narrative_data = self.narrative_store.load_recent(3)
             except Exception as exc:
@@ -454,6 +482,30 @@ class CogitoEngine:
             emo_polarity = float(emo_result.get("polarity", emo_result.get("sentiment", 0.0)))
             emo_confidence = float(emo_result.get("confidence", 0.0))
 
+        # ── 提取时间与位置数据 ──
+        now = datetime.now().astimezone()
+        now_local = now.strftime("%Y-%m-%d %H:%M")
+        now_weekday = now.strftime("%A")
+        now_period = get_period(now)
+
+        loc_data = {}
+        try:
+            loc_data = get_location()
+        except Exception:
+            pass
+        location = loc_data.get("city", "")
+
+        weather_str = ""
+        try:
+            weather_data = get_weather()
+            if weather_data.get("available"):
+                weather_str = (
+                    f"{weather_data['weather']} {weather_data['temperature']}°C "
+                    f"湿度{weather_data['humidity']}%"
+                )
+        except Exception:
+            pass
+
         # ── 构建 ContextInput ──
         inp = ContextInput(
             heartbeat_mode=heartbeat_mode,
@@ -467,8 +519,12 @@ class CogitoEngine:
             unresolved_topics=unresolved,
             cross_session_patterns=[],   # P2: 跨会话模式补齐
             relationship_days=0,         # P1.5: 关系纪元
-            weather="",                  # P1.5: 环境传感器重构
-            location="",
+            weather=weather_str,
+            location=location,
+            now_local=now_local,
+            now_weekday=now_weekday,
+            now_period=now_period,
+            now_hour=now.hour,
             tick_count=state.ticker.tick_counter,
         )
 
@@ -551,9 +607,118 @@ class CogitoEngine:
                     focus_topics=unique,
                     emotion_summary="",
                     session_id=state.session_id,
+                    pending=True,  # 等待 deferred reflection 用 LLM 生成完整摘要
                 )
         except Exception as exc:
             logger.error("保存叙事记忆失败: %s", exc)
+
+    def _run_deferred_reflection(self) -> None:
+        """执行延迟反射：查找 pending 条目 → 用 LLM 生成摘要 → 回写。
+
+        当上一 session 的 narrative entry 仍为 pending=true 时调用。
+        需要 self._reflection_llm 已配置。
+        """
+        # 1. 检查是否有 pending 条目
+        if not self.narrative_store.has_pending():
+            return
+
+        # 2. 加载最新的 pending 条目
+        recent = self.narrative_store.load_recent(3)
+        pending_entry = None
+        for entry in reversed(recent):
+            if entry.get("pending"):
+                pending_entry = entry
+                break
+        if pending_entry is None:
+            return
+
+        session_id = pending_entry.get("session_id", "")
+        if not session_id:
+            return
+
+        # 3. 加载对应的反射条目（含 keyframe texts）
+        reflections = self.session_reflector.load_recent(3)
+        keyframe_texts: List[str] = []
+        focus_topics: List[str] = pending_entry.get("focus_topics", [])
+        for ref in reversed(reflections):
+            if ref.get("session_id") == session_id:
+                keyframe_texts = ref.get("keyframe_texts", [])
+                break
+
+        # 4. 无关键帧时降级：用 focus_topics + summary 拼简化 prompt 调 LLM
+        if not keyframe_texts:
+            summary_hint = pending_entry.get("summary", "")
+            if not focus_topics and not summary_hint:
+                logger.debug("延迟反射: session %s 无关键帧且无话题，跳过", session_id)
+                self.narrative_store.update_entry(
+                    session_id=session_id,
+                    summary=summary_hint,
+                    pending=False,
+                )
+                return
+
+            # 用已有摘要 + 话题拼一个简化 prompt
+            prompt_parts = ["你是会话反射器。基于以下会话摘要生成结构化 JSON。"]
+            if summary_hint:
+                prompt_parts.append(f"会话关键词摘要：{summary_hint}")
+            if focus_topics:
+                prompt_parts.append(f"焦点话题：{', '.join(focus_topics)}")
+            prompt_parts.append(
+                "只返回一个 JSON 对象（无代码块包裹）："
+                '{"summary": "...", "insights": "...", "unresolved": "...", "emotion_summary": "..."}'
+            )
+            prompt = "\n".join(prompt_parts)
+
+            try:
+                raw = self._reflection_llm(prompt)
+                result = self.session_reflector._parse_reflection(raw)
+            except Exception as exc:
+                logger.debug("延迟反射 LLM 调用失败（降级 prompt）: %s", exc)
+                self.narrative_store.update_entry(
+                    session_id=session_id,
+                    summary=summary_hint,
+                    pending=False,
+                )
+                return
+
+            self.narrative_store.update_entry(
+                session_id=session_id,
+                summary=result.get("summary", summary_hint),
+                insights=result.get("insights", ""),
+                unresolved=result.get("unresolved", ""),
+                emotion_summary=result.get("emotion_summary", ""),
+                pending=False,
+            )
+            logger.info("延迟反射完成（降级 prompt）: session %s", session_id)
+            return
+
+        # 5. 调用 LLM 生成摘要
+        try:
+            result = self.session_reflector.reflect_with_llm(
+                keyframe_texts=keyframe_texts,
+                focus_topics=focus_topics,
+                llm_fn=self._reflection_llm,
+            )
+        except Exception as exc:
+            logger.warning("延迟反射 LLM 调用失败: %s", exc)
+            # 降级：移除 pending 标记，保留关键词摘要
+            self.narrative_store.update_entry(
+                session_id=session_id,
+                summary=pending_entry.get("summary", ""),
+                pending=False,
+            )
+            return
+
+        # 6. 回写 narrative.jsonl
+        self.narrative_store.update_entry(
+            session_id=session_id,
+            summary=result.get("summary", ""),
+            insights=result.get("insights", ""),
+            unresolved=result.get("unresolved", ""),
+            emotion_summary=result.get("emotion_summary", ""),
+            pending=False,
+        )
+        logger.info("延迟反射完成: session %s → narrative 更新", session_id)
 
     # ── 关键词提取模块（可选依赖） ──
 

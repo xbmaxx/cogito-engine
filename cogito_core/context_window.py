@@ -75,6 +75,12 @@ class ContextInput:
     weather: str = ""
     location: str = ""
 
+    # time (from system clock — not proxy-dependent)
+    now_local: str = ""         # e.g. "2026-07-05 10:25"
+    now_weekday: str = ""       # e.g. "Sunday"
+    now_period: str = ""        # e.g. "上午"
+    now_hour: int = 0
+
     # system
     tick_count: int = 0
 
@@ -103,6 +109,10 @@ class HierarchicalContextBuilder:
 
     def _build_immediate(self, inp: ContextInput) -> str:
         lines: List[str] = []
+
+        # ── 系统时间（第一行，最高优先级）──
+        if inp.now_local:
+            lines.append(f"🕐 {inp.now_local} · {inp.now_weekday} {inp.now_period}")
 
         # 心跳行：icon + expression
         if inp.heartbeat_mode or inp.heartbeat_expression:
@@ -187,8 +197,8 @@ class HierarchicalContextBuilder:
             lines.extend(inp.cross_session_patterns[:2])
 
         result = "\n".join(lines) if lines else ""
-        # 折叠规则：内容 ≤ 12 chars 时省略 background 层（"相处 11 天" = 9 太薄）
-        if len(result) <= 12:
+        # 折叠规则：内容为空时才省略（位置信息即使短也有意义）
+        if not result.strip():
             return ""
         return result
 

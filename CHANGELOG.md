@@ -1,5 +1,14 @@
 # Cogito Engine 版本更新记录
 
+## v1.4.2 — 2026.07.05
+
+• Agent 现在能感知当前时间和天气了，城市定位自动识别，天气自动获取
+• 情绪感知从单一极性升级为七维情绪（快乐/喜欢/愤怒/悲伤/恐惧/厌恶/惊讶），感受更细腻
+• 叙事记忆在所有场景下都不会遗漏写入，跨会话的记忆更完整
+• 情绪分类器升级、持久化碎片化修复、叙述摘要自然化、延迟反射降级修复
+
+[下载 v1.4.2](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.4.2.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.4.2.tar.gz)
+
 ## v1.4.0 — 2026.07.02
 
 • 新增心跳叙事系统：Agent 回复时带情绪温度，开心时更暖、失落时更软，不再是冷冰冰的机器语气
