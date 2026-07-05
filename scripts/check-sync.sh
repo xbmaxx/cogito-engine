@@ -1,7 +1,7 @@
 #!/bin/bash
 # Cogito Engine sync checker — pre-commit hook
 # 确保 repo 修改已同步到 .cogito / plugin / skill 三个运行时目录。
-# 安装: ln -sf ../../scripts/check-sync.sh .git/hooks/pre-commit
+# 安装: cd ~/.hermes/workspace/cogito-engine && ln -sf ../../scripts/check-sync.sh .git/hooks/pre-commit
 
 set -euo pipefail
 
