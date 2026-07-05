@@ -96,6 +96,7 @@ class NarrativeStore:
         focus_topics: Optional[List[str]] = None,
         emotion_summary: str = "",
         session_id: str = "",
+        pending: bool = False,
     ) -> Dict[str, Any]:
         """追加一条叙事条目。
 
@@ -106,12 +107,14 @@ class NarrativeStore:
             focus_topics: 焦点话题列表
             emotion_summary: 情感总结
             session_id: 会话 ID
+            pending: 是否等待 LLM 完整摘要（deferred reflection）
 
         Returns:
             新追加的叙事条目 dict。
         """
         entry: Dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "pending": pending,
             "session_id": session_id or "",
             "summary": summary.strip(),
             "insights": insights.strip(),
@@ -142,6 +145,15 @@ class NarrativeStore:
         """
         entries = self._load_all()
         return entries[-k:] if entries else []
+
+    def has_pending(self) -> bool:
+        """检查是否有等待 deferred reflection 的条目。
+
+        Returns:
+            True 表示有 pending 条目需要处理。
+        """
+        entries = self._load_all()
+        return any(e.get("pending", False) for e in entries)
 
     def finalize(self) -> None:
         """最终化（会话结束时调用）。
