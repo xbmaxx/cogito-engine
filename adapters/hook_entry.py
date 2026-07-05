@@ -42,7 +42,6 @@ from typing import Any, Dict, List, Optional, Tuple
 _cogito_paths = [
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
     os.path.expanduser("~/.cogito"),
-    os.path.expanduser("~/.hermes/plugins/hermes_consciousness"),
 ]
 for _p in _cogito_paths:
     if os.path.isdir(os.path.join(_p, "cogito_core")):
