@@ -2,6 +2,7 @@
 hermes_adapter.py —— Hermes Plugin 适配器。
 
 实现 HermesPlugin 接口，将 Hermes 的 hooks 事件翻译为 CogitoEngine 调用。
+支持 deferred reflection：提供 reflection LLM 调用函数给引擎。
 
 接口：
     register(ctx):  注册 tools + hooks
@@ -16,13 +17,268 @@ hermes_adapter.py —— Hermes Plugin 适配器。
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+import yaml
 
 from cogito_core.engine import CogitoEngine, EngineState
 
 logger = logging.getLogger(__name__)
+
+
+# ── Reflection LLM 函数构建 ──
+
+
+# ── 已知 provider 的默认 base_url ──
+_KNOWN_PROVIDER_URLS: Dict[str, str] = {
+    "deepseek": "https://api.deepseek.com/v1",
+    "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com",
+    "zai": "https://api.z.ai/api",
+    "groq": "https://api.groq.com/openai/v1",
+    "xai": "https://api.x.ai/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "mistral": "https://api.mistral.ai/v1",
+}
+
+
+# ── 多策略 key 查找 ──
+
+
+def _load_dotenv(hermes_home: str = "") -> Dict[str, str]:
+    """读取 Hermes 的 .env 文件，返回 key→value 映射。
+
+    Hermes 将 API key 存放在 ~/.hermes/.env 中，启动时自动加载到进程环境。
+    插件运行在 Hermes 进程内，但 os.environ.get() 可能不包含（取决于加载时机），
+    因此直接解析文件作为补充。
+    """
+    if not hermes_home:
+        hermes_home = str(Path.home() / ".hermes")
+    env_path = os.path.join(hermes_home, ".env")
+    if not os.path.exists(env_path):
+        return {}
+    result: Dict[str, str] = {}
+    try:
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and value:
+                    result[key] = value
+    except Exception:
+        pass
+    return result
+
+
+def _find_api_key(
+    config: Dict[str, Any],
+    provider_name: str,
+    model_id: str,
+) -> tuple:
+    """按优先级查找：custom_providers → 旧版 providers → .env 文件 → 环境变量 → OPENAI_API_KEY。
+
+    Returns:
+        (api_key, base_url, effective_model) —— 任一为空字符串表示未找到
+    """
+    provider_lower = provider_name.lower()
+
+    # ── 策略 1: custom_providers 数组（v0.18+）──
+    custom_providers = config.get("custom_providers", [])
+    if isinstance(custom_providers, list):
+        for cp in custom_providers:
+            cp_name = (cp.get("name") or "").lower()
+            cp_model = cp.get("model", "")
+            # 按名称或模型匹配
+            if cp_name == provider_lower or cp_model == model_id:
+                api_key = cp.get("api_key", "")
+                if api_key:
+                    return (
+                        api_key,
+                        cp.get("base_url", ""),
+                        cp_model or model_id,
+                    )
+
+    # ── 策略 2: 旧版 providers dict ──
+    providers = config.get("providers", {})
+    if isinstance(providers, dict):
+        provider_config = providers.get(provider_name, {})
+        if provider_config:
+            api_key = provider_config.get("api_key", "")
+            if api_key:
+                return (
+                    api_key,
+                    provider_config.get("base_url", ""),
+                    provider_config.get("model", model_id),
+                )
+
+    # ── 策略 3: Hermes .env 文件 ──
+    dotenv = _load_dotenv()
+    env_key = dotenv.get(f"{provider_name.upper()}_API_KEY", "")
+    if env_key:
+        return (env_key, "", model_id)
+
+    # ── 策略 4: 标准环境变量 ──
+    api_key = os.environ.get(f"{provider_name.upper()}_API_KEY", "")
+    if api_key:
+        return (api_key, "", model_id)
+
+    # ── 策略 5: OPENAI_API_KEY 通用变体 ──
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if api_key:
+        return (api_key, "", model_id)
+
+    return ("", "", "")
+
+
+def _build_reflection_llm(config_path: str = "") -> Optional[Callable[[str], str]]:
+    """从 Hermes 配置构建 reflection LLM 调用函数。
+
+    读取当前接入的 model/provider，按优先级查找 API 密钥：
+      1. custom_providers 数组（v0.18+）
+      2. config["providers"] dict（旧版格式）
+      3. ~/.hermes/.env 文件（Hermes 官方凭证存储）
+      4. {PROVIDER}_API_KEY 环境变量
+      5. OPENAI_API_KEY 通用 fallback
+
+    不写死模型——由用户当前 Hermes 配置决定。
+
+    Args:
+        config_path: Hermes config.yaml 路径，默认 ~/.hermes/config.yaml
+
+    Returns:
+        callable 或 None（配置不可用时）
+    """
+    if not config_path:
+        config_path = str(Path.home() / ".hermes" / "config.yaml")
+
+    if not os.path.exists(config_path):
+        logger.debug("reflection LLM: 无 config.yaml，跳过")
+        return None
+
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+    except Exception as exc:
+        logger.debug("reflection LLM: 读取 config 失败: %s", exc)
+        return None
+
+    # 获取当前 provider/model
+    model_config = config.get("model", {})
+    if not isinstance(model_config, dict):
+        logger.debug("reflection LLM: model 配置格式异常")
+        return None
+
+    provider_name = model_config.get("provider", "")
+    model_id = model_config.get("default", "")
+    if not provider_name:
+        logger.debug("reflection LLM: 未找到 model.provider")
+        return None
+
+    # 多策略查找
+    api_key, base_url, effective_model = _find_api_key(config, provider_name, model_id)
+    if not api_key:
+        logger.debug(
+            "reflection LLM: 未找到 %s 的 API key（检查过 config + env）",
+            provider_name,
+        )
+        return None
+
+    # 确定 base_url
+    if not base_url:
+        base_url = _KNOWN_PROVIDER_URLS.get(provider_name.lower(), "https://api.openai.com/v1")
+
+    logger.info(
+        "reflection LLM: 启用 deferred reflection（provider=%s, model=%s）",
+        provider_name, effective_model,
+    )
+
+    def _llm(prompt: str) -> str:
+        """调用 LLM 生成 reflection 摘要。"""
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        payload = json.dumps({
+            "model": effective_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 600,
+            "temperature": 0.3,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(url, data=payload, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        })
+
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+
+        return result["choices"][0]["message"]["content"]
+
+    return _llm
+
+
+# ── 通用 reflection LLM（适用所有 agent：Claude Code / Copilot / Codex / Gemini CLI）──
+
+
+# 常见 agent 环境变量 → provider 映射（按使用频率排序）
+_UNIVERSAL_KEY_MAP: List[tuple] = [
+    ("DEEPSEEK_API_KEY", "deepseek-v4-flash", "https://api.deepseek.com/v1"),
+    ("OPENAI_API_KEY", "gpt-4o-mini", "https://api.openai.com/v1"),
+    ("ANTHROPIC_API_KEY", "claude-3-5-haiku-latest", "https://api.anthropic.com"),
+    ("GOOGLE_API_KEY", "gemini-2.0-flash", "https://generativelanguage.googleapis.com/v1beta"),
+    ("GEMINI_API_KEY", "gemini-2.0-flash", "https://generativelanguage.googleapis.com/v1beta"),
+    ("OPENROUTER_API_KEY", "openai/gpt-4o-mini", "https://openrouter.ai/api/v1"),
+    ("GROQ_API_KEY", "llama-3.1-8b-instant", "https://api.groq.com/openai/v1"),
+]
+
+
+def _build_universal_reflection_llm() -> Optional[Callable[[str], str]]:
+    """构建通用 reflection LLM——适用于所有 agent adapter。
+
+    按优先级探测当前进程环境变量中常见的 API key，找到第一个可用的。
+    不依赖 Hermes config/.env 路径，任何 agent 的子进程都能用。
+
+    Returns:
+        callable 或 None（所有 key 都不可用时）
+    """
+    for env_var, model, base_url in _UNIVERSAL_KEY_MAP:
+        api_key = os.environ.get(env_var, "")
+        if api_key:
+            logger.info(
+                "reflection LLM: 通用探测成功（env=%s, model=%s）",
+                env_var, model,
+            )
+
+            def _llm(prompt: str, _key=api_key, _url=base_url, _model=model) -> str:
+                endpoint = f"{_url.rstrip('/')}/chat/completions"
+                payload = json.dumps({
+                    "model": _model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 600,
+                    "temperature": 0.3,
+                }).encode("utf-8")
+
+                req = urllib.request.Request(endpoint, data=payload, headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {_key}",
+                })
+
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+
+                return result["choices"][0]["message"]["content"]
+
+            return _llm
+
+    logger.debug("reflection LLM: 通用探测未找到任何 API key")
+    return None
 
 
 # ── HermesAdapter 主类 ──
@@ -49,12 +305,16 @@ class HermesAdapter:
         import cogito_core.session_reflector as _sr
         _sr._COGITO_HOME = Path.home() / ".hermes" / "memory"
 
+        # 构建 reflection LLM（从 Hermes config 读取当前模型）
+        reflection_llm = _build_reflection_llm()
+
         self.engine = CogitoEngine(
             include_weather=include_weather,
             include_battery=include_battery,
             include_resources=include_resources,
             include_emotion=include_emotion,
             include_narrative=include_narrative,
+            reflection_llm=reflection_llm,
         )
         # 引擎状态保存在实例属性中，跨 turn 持久化
         self._state: Optional[EngineState] = None
@@ -73,9 +333,6 @@ class HermesAdapter:
         # 注册 hook 回调（Hermes 通过 **kwargs 调用，而非单个 ctx 参数）
         ctx.register_hook("pre_llm_call", self._pre_llm_call)
         ctx.register_hook("on_session_end", self._on_session_end)
-
-        # 可选：注册 tools（让 Agent 能主动触发感知）
-        # 此处可扩展 register_cogito_tools(ctx)
 
     def _pre_llm_call(self, **kwargs: Any) -> Optional[str]:
         """pre_llm_call hook：在 LLM 调用前返回意识 XML。
@@ -103,7 +360,14 @@ class HermesAdapter:
             # 恢复/创建引擎状态（使用实例属性跨 turn 持久化）
             state = self._state
             if state is None:
-                state = EngineState(session_id=session_id)
+                # v1.5.10: 尝试从 state.json 恢复上一 session 的焦点栈
+                from cogito_core.persistence import load_state as _load_state
+                saved = _load_state()
+                if saved:
+                    state = EngineState.from_dict(saved, session_id=session_id)
+                    logger.debug("pre_llm_call: 从 state.json 恢复焦点栈 (depth=%d)", state.focus_stack.depth)
+                else:
+                    state = EngineState(session_id=session_id)
 
             # 调用引擎处理
             xml, new_state = self.engine.process(messages, state)
@@ -163,7 +427,7 @@ class HermesAdapter:
                 if len(all_keywords) > 5:
                     focus_summary += "等话题"
 
-            # 执行收尾
+            # 执行收尾（messages 传递给引擎用于 keyframe 提取和 deferred reflection）
             self.engine.end_session(
                 state=state,
                 messages=messages,
@@ -200,16 +464,6 @@ def _demo() -> None:
     """命令行演示。"""
     adapter = HermesAdapter()
     print(f"HermesAdapter 已创建，引擎: {adapter.engine}")
-
-    # 模拟消息
-    test_msgs = [
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "今天天气怎么样？帮我写一段代码。"},
-    ]
-    state = EngineState(session_id="demo")
-    xml, new_state = adapter.engine.process(test_msgs, state)
-    print(f"\n生成的意识 XML ({len(xml)} chars):")
-    print(xml)
 
 
 if __name__ == "__main__":

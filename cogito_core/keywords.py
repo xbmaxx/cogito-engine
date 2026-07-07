@@ -5,6 +5,7 @@ jieba 分词优先，n-gram 兜底。jieba 已列入 requirements.txt。
 """
 
 from collections import Counter
+import re
 
 try:
     import jieba
@@ -44,6 +45,10 @@ STOP_WORDS_EN = frozenset({
     'yet', 'already', 'always', 'never', 'often', 'really',
     'very', 'much', 'many', 'well', 'back', 'down', 'up',
     'name', 'task', 'skill',  # 工具对话高频噪音词
+    # v1.5.10: 焦点栈噪声修复 —— 从实际污染数据中识别的 16 个高频工具输出词
+    'user', 'one', 'skills', 'via', 'session', 'step', 'tool',
+    'class', 'path', 'checkpoint', 'generate', 'context', 'summary',
+    'stop', 'save', 'memory', 'file', 'downloads',
 })
 
 # 向后兼容别名
@@ -71,6 +76,9 @@ STOP_TAIL_CHARS = set('一几某每这那今')
 
 def _is_valid_ngram(word: str) -> bool:
     if not word or len(word) < 2 or word in STOP_WORDS:
+        return False
+    # ── v1.5.10: 过滤含空格的碎片 n-gram ──
+    if ' ' in word:
         return False
     if word.lower() in STOP_WORDS_EN:
         return False
@@ -151,6 +159,45 @@ def _extract_jieba(text: str, max_keywords: int = 8) -> list[str]:
     return [w for w, _ in scored[:max_keywords]]
 
 
+def _strip_tool_output(text: str) -> str:
+    """剥离 Hermes 工具输出，只保留用户原始消息文本。
+
+    Hermes 框架在工具调用后将结果 append 到用户消息体，
+    导致关键词提取被工具输出中的英文技术词汇污染。
+
+    Args:
+        text: 可能被工具输出污染的用户消息文本
+
+    Returns:
+        清理后的纯用户文本
+    """
+    if not text:
+        return text
+
+    _TOOL_BOUNDARY_PATTERNS = [
+        r'\n\s*<function_calls>',
+        r'\n\s*<function_results>',
+        r'\n\s*{"name":\s*"',
+        r'\n\s*{"id":\s*"',
+        r'\n\s*\[toolu_',
+        r'\n\s*Tool:\s',
+        r'\n\s*<invoke\s',
+        r'\n\s*<tool_result>',
+        r'\n─────',
+        r'\n\s*<\|',
+        r'\n\s*\[TOOL_',
+        r'\n\s*\[RESULT\]',
+    ]
+
+    for pattern in _TOOL_BOUNDARY_PATTERNS:
+        m = re.search(pattern, text)
+        if m:
+            text = text[:m.start()]
+            break
+
+    return text.strip()
+
+
 def extract_keywords(text: str, max_keywords: int = 8) -> list[str]:
     """从中文文本中提取关键词。
 
@@ -163,6 +210,11 @@ def extract_keywords(text: str, max_keywords: int = 8) -> list[str]:
     Returns:
         按 (词频×长度权重) 降序排列的关键词列表
     """
+    if not text:
+        return []
+
+    # ── P0: 剥离工具输出，只对用户原始文本提取关键词 ──
+    text = _strip_tool_output(text)
     if not text:
         return []
 

@@ -56,6 +56,21 @@ def _has_ascii_word(text: str) -> bool:
     return bool(re.search(r'\b[a-zA-Z]{2,}\b', text))
 
 
+# ── 叙事记忆质量门：垃圾关键词 ──
+
+_NARRATIVE_GARBAGE_KW = frozenset({
+    "user", "one", "two", "via", "session",
+    "checkpoint", "Generate", "context", "summary",
+    "skills", "tool", "stop", "save", "memory",
+    "saving", "worth", "file", "Downloads",
+})
+
+_GARBAGE_PATTERNS = [
+    {"user", "one", "skills", "via", "session"},     # delegate_task 子代理
+    {"checkpoint", "Generate", "context", "summary"}, # context 压缩
+]
+
+
 # ── 引擎状态类型 ──
 
 class EngineState:
@@ -103,11 +118,22 @@ class EngineState:
     ) -> "EngineState":
         """从持久化的字典恢复引擎状态。
 
-        Note: Ticker 和 FocusStack 始终重新创建（无历史恢复）。
+        v1.5.10: 恢复焦点栈（跨会话焦点累积）。
+        Ticker 始终重新从 0 开始计数。
         """
         state = cls(session_id=session_id)
         if "last_message_count" in data:
             state.last_message_count = data["last_message_count"]
+        # ── 恢复焦点栈 ──
+        focus_topics = data.get("focus_topics", [])
+        if focus_topics:
+            for topics in focus_topics:
+                if topics:
+                    state.focus_stack.update(
+                        list(topics),
+                        tick_counter=0,
+                        source="user",
+                    )
         return state
 
 
@@ -166,6 +192,7 @@ class CogitoEngine:
         self.include_narrative = include_narrative
         self._heartbeat_mapper = None   # 延迟加载，避免 import 失败阻断主链路
         self._reflection_llm = reflection_llm  # deferred reflection LLM 函数
+        self._session_messages: List[Dict[str, Any]] = []  # 消息缓存，end_session 使用
 
     def process(
         self,
@@ -339,6 +366,8 @@ class CogitoEngine:
             # 重新加载叙事数据（可能已被 deferred reflection 更新）
             try:
                 narrative_data = self.narrative_store.load_recent(3)
+                # P0: 只注入已 LLM 增强的叙事（pending=false），避免垃圾摘要污染意识 XML
+                narrative_data = [e for e in narrative_data if not e.get("pending", False)]
                 narrative_data_loaded = True
             except Exception:
                 pass
@@ -347,6 +376,8 @@ class CogitoEngine:
         if not narrative_data_loaded and is_first and self.include_narrative:
             try:
                 narrative_data = self.narrative_store.load_recent(3)
+                # P0: 只注入已 LLM 增强的叙事
+                narrative_data = [e for e in narrative_data if not e.get("pending", False)]
             except Exception as exc:
                 logger.debug("叙事记忆加载失败: %s", exc)
 
@@ -380,6 +411,9 @@ class CogitoEngine:
             heartbeat_mode=heartbeat_mode,
             heartbeat_expression=heartbeat_expression,
         )
+
+        # 缓存消息供 end_session 使用（平台无关）
+        self._session_messages = messages
 
         return xml, state
 
@@ -536,6 +570,75 @@ class CogitoEngine:
 
     # ── 会话生命周期 ──
 
+    def _should_write_narrative(
+        self,
+        state: "EngineState",
+        messages: Optional[List[Dict[str, Any]]],
+        focus_summary: str,
+    ) -> bool:
+        """质量门：判断当前 session 是否值得写入叙事记忆。
+
+        三道门，全通过才返回 True：
+        1. 焦点栈深度 ≥ 3
+        2. 对话轮次 ≥ 3（messages=None 时降级跳过）
+        3. focus_summary 不命中垃圾模式（≥3 个关键词命中任一模式则拒绝）
+
+        Returns:
+            True 表示应该写入叙事记忆
+        """
+        # 门 1: 焦点栈深度 ≥ 3
+        depth = len(state.focus_stack.stack) if state.focus_stack.stack else 0
+        if depth < 3:
+            logger.debug(
+                "叙事记忆质量门拒绝: depth=%d < 3, session=%s",
+                depth, state.session_id,
+            )
+            return False
+
+        # 门 2: 对话轮次 ≥ 3（messages=None 时降级跳过）
+        if messages is not None:
+            from .keyframe_extractor import estimate_conversation_rounds
+            rounds = estimate_conversation_rounds(messages)
+            if rounds < 3:
+                logger.debug(
+                    "叙事记忆质量门拒绝: rounds=%d < 3, session=%s",
+                    rounds, state.session_id,
+                )
+                return False
+
+        # 门 3: 非模板化垃圾
+        if focus_summary:
+            summary_lower = focus_summary.lower()
+            for pattern in _GARBAGE_PATTERNS:
+                hits = sum(1 for kw in pattern if kw.lower() in summary_lower)
+                if hits >= 3:
+                    logger.debug(
+                        "叙事记忆质量门拒绝: 命中 %d 个垃圾词, session=%s",
+                        hits, state.session_id,
+                    )
+                    return False
+
+        return True
+
+    def _is_garbage_summary(self, text: str) -> bool:
+        """轻量垃圾检查：只执行门 3（关键词模式匹配）。
+
+        与 _should_write_narrative 的完整三道门不同，此方法仅检查
+        text 是否命中 _GARBAGE_PATTERNS 中的任一模式（≥3 个关键词）。
+        用于降级路径等场景，不需要 EngineState / messages 上下文。
+
+        Returns:
+        True 表示 text 是垃圾，应跳过。
+        """
+        if not text:
+            return False
+        text_lower = text.lower()
+        for pattern in _GARBAGE_PATTERNS:
+            hits = sum(1 for kw in pattern if kw.lower() in text_lower)
+            if hits >= 3:
+                return True
+        return False
+
     def end_session(
         self,
         state: EngineState,
@@ -569,11 +672,12 @@ class CogitoEngine:
         except Exception as exc:
             logger.error("保存引擎状态失败: %s", exc)
 
-        # 生成会话反射
-        if messages:
+        # 生成会话反射（优先用传入的消息，否则用引擎缓存的消息）
+        effective_messages = messages or self._session_messages
+        if effective_messages:
             try:
                 self.session_reflector.reflect(
-                    messages=messages,
+                    messages=effective_messages,
                     session_id=state.session_id,
                     tick_count=state.ticker.tick_counter,
                     focus_topics=[
@@ -585,6 +689,10 @@ class CogitoEngine:
                 logger.error("会话反射生成失败: %s", exc)
 
         # 保存叙事记忆（narrative_store.append 写 narrative.jsonl）
+        # ── 质量门：不通过则跳过叙事记忆写入 ──
+        if not self._should_write_narrative(state, effective_messages, focus_summary):
+            logger.debug("叙事记忆质量门跳过写入: session=%s", state.session_id)
+            return
         try:
             if state.focus_stack.stack:
                 all_keywords = []
@@ -617,112 +725,127 @@ class CogitoEngine:
             logger.error("保存叙事记忆失败: %s", exc)
 
     def _run_deferred_reflection(self) -> None:
-        """执行延迟反射：查找 pending 条目 → 用 LLM 生成摘要 → 回写。
+        """执行延迟反射：批量查找 pending 条目 → 用 LLM 生成摘要 → 回写。
 
         当上一 session 的 narrative entry 仍为 pending=true 时调用。
         需要 self._reflection_llm 已配置。
+
+        v1.4.4: while 循环批量处理，每轮最多 5 条；处理后 mark_session_resolved
+        清理同 session 所有剩余 pending。
         """
-        # 1. 检查是否有 pending 条目
-        if not self.narrative_store.has_pending():
-            return
+        MAX_BATCH = 5
+        processed = 0
 
-        # 2. 加载最新的 pending 条目
-        recent = self.narrative_store.load_recent(3)
-        pending_entry = None
-        for entry in reversed(recent):
-            if entry.get("pending"):
-                pending_entry = entry
-                break
-        if pending_entry is None:
-            return
-
-        session_id = pending_entry.get("session_id", "")
-        if not session_id:
-            return
-
-        # 3. 加载对应的反射条目（含 keyframe texts）
-        reflections = self.session_reflector.load_recent(3)
-        keyframe_texts: List[str] = []
-        focus_topics: List[str] = pending_entry.get("focus_topics", [])
-        for ref in reversed(reflections):
-            if ref.get("session_id") == session_id:
-                keyframe_texts = ref.get("keyframe_texts", [])
+        while processed < MAX_BATCH:
+            # 1. 检查是否有 pending 条目
+            if not self.narrative_store.has_pending():
                 break
 
-        # 4. 无关键帧时降级：用 focus_topics + summary 拼简化 prompt 调 LLM
-        if not keyframe_texts:
-            summary_hint = pending_entry.get("summary", "")
-            if not focus_topics and not summary_hint:
-                logger.debug("延迟反射: session %s 无关键帧且无话题，跳过", session_id)
+            # 2. 加载最新的 pending 条目
+            recent = self.narrative_store.load_recent(3)
+            pending_entry = None
+            for entry in reversed(recent):
+                if entry.get("pending"):
+                    pending_entry = entry
+                    break
+            if pending_entry is None:
+                break
+
+            session_id = pending_entry.get("session_id", "")
+            if not session_id:
+                break
+
+            # 3. 加载对应的反射条目（含 keyframe texts）
+            # v1.4.4: 窗口放大到 10，避免 delegate_task 条目挤出真实 keyframes
+            reflections = self.session_reflector.load_recent(10)
+            keyframe_texts: List[str] = []
+            focus_topics: List[str] = pending_entry.get("focus_topics", [])
+            for ref in reversed(reflections):
+                if ref.get("session_id") == session_id:
+                    keyframe_texts = ref.get("keyframe_texts", [])
+                    break
+
+            # 4. 无关键帧时降级：用 focus_topics + summary 拼简化 prompt 调 LLM
+            if not keyframe_texts:
+                summary_hint = pending_entry.get("summary", "")
+                # v1.4.4: 降级路径入口前复用质量门垃圾检查，命中则直接跳过
+                if self._is_garbage_summary(summary_hint):
+                    logger.debug(
+                        "延迟反射: session %s 摘要命中垃圾模式，跳过 LLM", session_id
+                    )
+                    self.narrative_store.mark_session_resolved(session_id)
+                    processed += 1
+                    continue
+                if not focus_topics and not summary_hint:
+                    logger.debug("延迟反射: session %s 无关键帧且无话题，跳过", session_id)
+                    self.narrative_store.mark_session_resolved(session_id)
+                    processed += 1
+                    continue
+
+                # 用已有摘要 + 话题拼一个简化 prompt
+                prompt_parts = ["你是会话反射器。基于以下会话摘要生成结构化 JSON。"]
+                if summary_hint:
+                    prompt_parts.append(f"会话关键词摘要：{summary_hint}")
+                if focus_topics:
+                    prompt_parts.append(f"焦点话题：{', '.join(focus_topics)}")
+                prompt_parts.append(
+                    "只返回一个 JSON 对象（无代码块包裹）："
+                    '{"summary": "...", "insights": "...", "unresolved": "...", "emotion_summary": "..."}'
+                )
+                prompt = "\n".join(prompt_parts)
+
+                try:
+                    raw = self._reflection_llm(prompt)
+                    result = self.session_reflector._parse_reflection(raw)
+                except Exception as exc:
+                    logger.debug("延迟反射 LLM 调用失败（降级 prompt）: %s", exc)
+                    self.narrative_store.mark_session_resolved(session_id)
+                    processed += 1
+                    continue
+
                 self.narrative_store.update_entry(
                     session_id=session_id,
-                    summary=summary_hint,
+                    summary=result.get("summary", summary_hint),
+                    insights=result.get("insights", ""),
+                    unresolved=result.get("unresolved", ""),
+                    emotion_summary=result.get("emotion_summary", ""),
                     pending=False,
                 )
-                return
+                self.narrative_store.mark_session_resolved(session_id)
+                logger.info("延迟反射完成（降级 prompt）: session %s", session_id)
+                processed += 1
+                continue
 
-            # 用已有摘要 + 话题拼一个简化 prompt
-            prompt_parts = ["你是会话反射器。基于以下会话摘要生成结构化 JSON。"]
-            if summary_hint:
-                prompt_parts.append(f"会话关键词摘要：{summary_hint}")
-            if focus_topics:
-                prompt_parts.append(f"焦点话题：{', '.join(focus_topics)}")
-            prompt_parts.append(
-                "只返回一个 JSON 对象（无代码块包裹）："
-                '{"summary": "...", "insights": "...", "unresolved": "...", "emotion_summary": "..."}'
-            )
-            prompt = "\n".join(prompt_parts)
-
+            # 5. 调用 LLM 生成摘要
             try:
-                raw = self._reflection_llm(prompt)
-                result = self.session_reflector._parse_reflection(raw)
-            except Exception as exc:
-                logger.debug("延迟反射 LLM 调用失败（降级 prompt）: %s", exc)
-                self.narrative_store.update_entry(
-                    session_id=session_id,
-                    summary=summary_hint,
-                    pending=False,
+                result = self.session_reflector.reflect_with_llm(
+                    keyframe_texts=keyframe_texts,
+                    focus_topics=focus_topics,
+                    llm_fn=self._reflection_llm,
                 )
-                return
+            except Exception as exc:
+                logger.warning("延迟反射 LLM 调用失败: %s", exc)
+                # 降级：移除 pending 标记，保留关键词摘要
+                self.narrative_store.mark_session_resolved(session_id)
+                processed += 1
+                continue
 
+            # 6. 回写 narrative.jsonl
             self.narrative_store.update_entry(
                 session_id=session_id,
-                summary=result.get("summary", summary_hint),
+                summary=result.get("summary", ""),
                 insights=result.get("insights", ""),
                 unresolved=result.get("unresolved", ""),
                 emotion_summary=result.get("emotion_summary", ""),
                 pending=False,
             )
-            logger.info("延迟反射完成（降级 prompt）: session %s", session_id)
-            return
+            # 清理同 session 其他 pending（delegate_task 残留）
+            self.narrative_store.mark_session_resolved(session_id)
+            logger.info("延迟反射完成: session %s → narrative 更新", session_id)
+            processed += 1
 
-        # 5. 调用 LLM 生成摘要
-        try:
-            result = self.session_reflector.reflect_with_llm(
-                keyframe_texts=keyframe_texts,
-                focus_topics=focus_topics,
-                llm_fn=self._reflection_llm,
-            )
-        except Exception as exc:
-            logger.warning("延迟反射 LLM 调用失败: %s", exc)
-            # 降级：移除 pending 标记，保留关键词摘要
-            self.narrative_store.update_entry(
-                session_id=session_id,
-                summary=pending_entry.get("summary", ""),
-                pending=False,
-            )
-            return
-
-        # 6. 回写 narrative.jsonl
-        self.narrative_store.update_entry(
-            session_id=session_id,
-            summary=result.get("summary", ""),
-            insights=result.get("insights", ""),
-            unresolved=result.get("unresolved", ""),
-            emotion_summary=result.get("emotion_summary", ""),
-            pending=False,
-        )
-        logger.info("延迟反射完成: session %s → narrative 更新", session_id)
+        if processed > 1:
+            logger.info("延迟反射批量处理: 本轮完成 %d 条", processed)
 
     # ── 关键词提取模块（可选依赖） ──
 

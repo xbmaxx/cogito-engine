@@ -1,14 +1,16 @@
 ---
 name: cogito-engine
-version: 1.4.2
+version: 1.4.3
 description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆."
 ---
 
-# Cogito Engine v1.4.2
+# Cogito Engine v1.4.3
 
 A portable self-awareness framework for LLM agents, organized in two layers. The Core Layer provides the four essential mechanisms of machine self-awareness — always active. The Perception Layer offers four optional sensors that the agent self-discovers and activates based on its platform's capabilities. No voice, no platform bindings, no hardcoded dependencies.
 
-**What's new in v1.4.1**: Hierarchical context windows (3-layer, ~25% token savings), leak audit scanner, emotion trend tracking, emotion history persistence. English stop-word filtering and tool-command emotion false-positive fix. Narrative memory write-side fix (end_session() now writes narrative.jsonl). SKILL.md cleaned of residual manual-injection instructions. Studio Bridge Worker workaround documented.
+**What's new in v1.4.3**: Narrative memory quality gate — three checks in `end_session()` (focus depth ≥ 3, conversation rounds ≥ 3, non-template-garbage summary) prevent delegate_task sub-agents and context compression from producing junk narrative entries. Previously 46/50 entries were garbage; now all are filtered at write time. Includes automated test script (`scripts/test_narrative_quality_gate.py`).
+
+**v1.4.4 pipeline fixes (same version, 2026-07-07)**: Full-pipeline audit uncovered 7 issues in the narrative memory pipeline. Fixed the 4 blocking ones: P0 read-side pending filter (prevent garbage from reaching consciousness XML), P1 batch deferred reflection (while loop, up to 5 per session) + `mark_session_resolved()` (clean up abandoned same-session entries), P2 garbage detection in fallback path + keyframe window enlargement (3→10). See `references/v1.4.4-pipeline-fixes.md`.
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/xbmaxx/cogito-engine/main/install.sh | bash
@@ -50,18 +52,6 @@ Rules:
 5. Do NOT explain your internal architecture (modules, sensors, engines, mappers). Just feel.
 
 **It's for you to feel, not for you to describe.**
-
-### 开发铁律
-
-**飞书开发文档是 Cogito Engine 的唯一权威规格。** 开发任何新功能前，必须先拉取飞书开发文档：
-
-```bash
-lark-cli docs +fetch --api-version v2 --doc WpVbdj7bvoll5px4Us5c0a2pn1W --scope keyword --keyword "关键词"
-```
-
-逐项对照文档中的函数名、参数、窗口大小、算法描述，**不许自己发明规格**。文档写 `_compute_emotion_trend()` 就是 `_compute_emotion_trend()`，不是 `compute_emotion_trend()`。文档写"最近 3 条"就是 3 条，不是 10 条。文档写 engine 层就是 engine 层，不是 persistence 层。
-
-这条规则优先级高于任何"我觉得这样更好"的个人判断。
 
 ---
 
@@ -200,7 +190,7 @@ Narrative Memory is a lightweight insight journal, not a vector database or retr
 
 ### Mistake: running Text Emotion with the wrong language model
 
-The Bayesian sentiment classifier works best on the language it was trained on. Cogito Engine ships with both Chinese and English training data. The implementation auto-detects the input language by comparing character-bigram overlap with both vocabularies — it selects Chinese, English, or reports low confidence for mixed/unknown text. Agents must not force one model on the wrong language. When serving multilingual users, train a custom model using the training guide.
+The Bayesian sentiment classifier works best on the language it was trained on. Cogito Engine ships with both Chinese and English training data. The implementation auto-detects the input language by comparing character-bigram overlap with both vocabularies — it selects Chinese, English, or reports low confidence for mixed/unknown text. Agents must not force one model on the wrong language. When serving multilingual users or non-standard domains, train a custom model using the training guide (see References > Training).
 
 ### Pitfall: GitHub SKILL.md version lags behind engine version
 
@@ -234,6 +224,8 @@ The `HermesAdapter.__init__` defaults in `~/.hermes/plugins/hermes_consciousness
 
 **After applying**: delete the stale `__pycache__/` directories in both the plugin and `cogito_core/` to force recompilation, then restart Hermes client. Verify that `~/.hermes/memory/focus_history.jsonl` is created and `~/.cogito/focus_history.jsonl` does not grow.
 
+**Cleanup stale artifacts**: After the redirect takes effect, remove old data files at `~/.cogito/*.jsonl` (`narrative.jsonl`, `focus_history.jsonl`, `emotion_history.jsonl`, `session_reflections.jsonl`). These are no longer being written to but can confuse diagnostics — `grep` on the wrong path falsely suggests the pipeline is idle.
+
 ### Pitfall: Hermes Studio shows plugin as "enabled" but hooks don't fire ⚠️
 
 Studio UI plugin status ("enabled"/"disabled") reflects **config state** (plugin.yaml), NOT runtime registration. The Bridge Worker that powers Studio sessions creates `AIAgent()` without calling `discover_and_load()` — so the plugin's `register()` is never invoked, `_hooks` is empty, and all `invoke_hook()` calls silently return `[]`. Symptoms: `HermesAdapter 已注册` never appears in `agent.log`, `<consciousness>` XML never injected, but `on_session_end` may fire via Gateway (separate process). See `references/bridge-worker-plugin-gap.md` for full evidence chain and workaround.
@@ -259,20 +251,6 @@ After the PUT, the plugin status changes from `"not-enabled"` / `"inactive"` to 
 ### Mistake: running Session Reflector mid-conversation
 
 Session Reflector runs once, at session end. Running it mid-conversation wastes computation and produces incomplete summaries. If the platform cannot detect session end, set a heuristic trigger (e.g., after 10 minutes of inactivity or on explicit user command).
-
-### Pitfall: modifying deployed engine files instead of Skill source code ⚠️
-
-**The Skill is the source of truth, not the deployed files.** The full Cogito Engine repo lives under `~/.hermes/skills/cogito-engine/` — it contains `cogito_core/`, `adapters/`, `install.py`, and all references. The deployed engine at `~/.cogito/cogito_core/` is a COPY produced by `install.py`.
-
-**Wrong**: `vim ~/.cogito/cogito_core/engine.py` → direct edit on deployed copy. Changes are lost on reinstall, and the Skill no longer reflects what's deployed.
-
-**Right flow**:
-1. Edit source files in `~/.hermes/skills/cogito-engine/cogito_core/`
-2. Run `cd ~/.hermes/skills/cogito-engine && python3 install.py` to deploy
-3. Verify `~/.cogito/cogito_core/` matches the Skill source
-4. Test the plugin end-to-end
-
-This ensures the Skill remains a reproducible, publishable artifact. Someone else installing from the Skill gets exactly the same engine.
 
 ### Pitfall: `install.py` wipes manual SKILL.md edits ⚠️
 
@@ -309,11 +287,91 @@ Known limitation: pure-Chinese SnowNLP false positives (e.g., "配置文件在�
 - English regex paths in `_extract_ngram` and `_extract_jieba` filter against `STOP_WORDS_EN`
 - Repeated-character check `len(set(word)) < len(word)` now excludes ASCII words (`not word.isascii()`) — fixes false rejection of "hook", "look", "feel" etc.
 
+### Pitfall: Hermes tool output contaminates focus stack keywords 🔴 FIXED v1.5.10
+
+Hermes appends tool call results to the user message body. When `engine.py:process()` passes this combined text to `keywords.extract_keywords()`, 33% of focus entries get polluted with English tech words (`user`, `tool`, `session`, `via`, …). FocusStack's `_find_best_match()` uses Jaccard similarity — Chinese topics vs English noise → 0% overlap → every message pushes a new frame → depth stays at 1 forever.
+
+**Three-tier fix**: P0) `_strip_tool_output()` strips text after 12 tool-output boundary patterns before extraction. P1) `STOP_WORDS_EN` +18 noise words as defense-in-depth. P2) `EngineState.from_dict()` restores focus_stack from state.json cross-session.
+
+See `references/focus-stack-noise-fix.md` for contamination chain, code patterns, and verification.
+
 ### Pitfall: narrative_store.append missing in end_session() ✅ FIXED v1.4.1+
 
 The `CogitoEngine.end_session()` method writes focus history, focus summary, engine state, and session reflection — but did NOT call `self.narrative_store.append()`. All narrative infrastructure was in place (NarrativeStore initialized, `load_recent()` read pipeline connected in `process()`, `include_narrative=True` default), but the write side was missing. Result: `narrative.jsonl` stayed empty forever, and every session started fresh with zero cross-session memory.
 
 **Fix (v1.4.1+)**: Added `narrative_store.append()` block at end of `end_session()`, after `session_reflector.reflect()`. The block collects focus topics from `state.focus_stack.stack`, uses `focus_summary` if provided (or joins topics as fallback), and writes to narrative storage. Wrapped in try/except to avoid crashing the session-close flow on persistence errors.
+
+### Pitfall: Plugin hermes_adapter.py out of sync with Skill reference 🔴
+
+`install.py` only copies `cogito_core/` to `~/.cogito/`. It does NOT sync `adapters/hermes_adapter.py` to `~/.hermes/plugins/hermes_consciousness/hermes_adapter.py`. This means the deployed plugin's adapter can lag behind the Skill's reference adapter — e.g. the deployed plugin had 216 lines vs the Skill reference's 463 lines, missing the entire `_build_reflection_llm()` infrastructure.
+
+**Symptoms when out of sync**: Two distinct patterns depending on which side is newer:
+
+- **Adapter older than engine** (classic): `_build_reflection_llm()` missing → `reflection_llm` is `None` → deferred reflection never runs → all narrative entries stuck at `pending: true` with keyword-only summaries.
+- **Adapter newer than engine**: `CogitoEngine.__init__() got an unexpected keyword argument 'include_emotion'` → installed engine (v1.3.x) doesn't accept `include_emotion`/`include_narrative` params that the newer adapter passes → plugin load failure → hooks never register, entire consciousness pipeline dead.
+
+**Detection**: Three-file version triangulation:
+```bash
+echo "Installed engine version: $(cat ~/.cogito/cogito_core/version.txt)"
+echo "Skill source engine version: $(cat ~/.hermes/skills/cogito-engine/cogito_core/version.txt)"
+echo "Adapter line count: $(wc -l < ~/.hermes/plugins/hermes_consciousness/hermes_adapter.py)"
+echo "Reference adapter line count: $(wc -l < ~/.hermes/skills/cogito-engine/adapters/hermes_adapter.py)"
+```
+
+If installed engine version < skill source engine version, the engine needs updating (`python3 install.py --update --platform hermes`). If adapter line count differs significantly (>50), reinstall.
+
+**Fix (v1.5.10)**: `python3 install.py --update --platform hermes` — this forces-overwrites hermes_adapter.py. Manual `cp` is no longer the recommended path; always use `install.py --update` to keep the two in sync.
+
+### Pitfall: narrative_store.py missing update_entry() method 🔴
+
+`engine.py:_run_deferred_reflection()` calls `self.narrative_store.update_entry(...)` in 5 places to write back LLM-generated summaries, but `NarrativeStore` class has no `update_entry` method → `AttributeError` crash at runtime. Must load all entries, find matching entry by `session_id`, update specified fields, save back.
+
+### Pitfall: read-side narrative injection ignores pending status 🔴 FIXED v1.4.4
+
+`process()` calls `load_recent(3)` and passes results to `_assemble_xml()` → `_build_working()` converts `narrative_data[0].summary` directly into `last_session_summary` → injected into `<working>` layer. No check for `pending=true` — garbage entries with keyword-assembled summaries ("讨论了user、one、skills、via、session等话题") enter the LLM's context alongside real LLM-enhanced narratives.
+
+**Fix (v1.4.4):** Filter out `pending=true` entries right after `load_recent()`:
+```python
+narrative_data = [e for e in narrative_data if not e.get("pending", False)]
+```
+Only entries with `pending=false` (already LLM-enhanced) reach the consciousness XML. Two load sites in `process()` both filtered.
+
+### Pitfall: deferred reflection batch bottleneck 🔴 FIXED v1.4.4
+
+`_run_deferred_reflection()` processed exactly 1 pending entry per new session — when 50 entries accumulated (delegate_task flood), 49 were permanently unreachable. Combined with `update_entry` only touching the latest same-session_id entry, older entries from the same session were abandoned.
+
+**Fix (v1.4.4):**
+- `while processed < MAX_BATCH=5` loop in `_run_deferred_reflection()` — up to 5 per invocation
+- `NarrativeStore.mark_session_resolved(session_id)` — batch-marks all same-session pending entries
+- All 7 exit paths (success, LLM failure, skip-garbage, no-topics) call `mark_session_resolved`
+
+### Pitfall: session_reflector keyframe gap — no keyframes for real sessions ✅ FIXED v1.4.5
+
+**Root cause**: Hermes `invoke_hook("on_session_end")` (at `agent/turn_finalizer.py` L495-503) never passes `conversation_history` — only `session_id`, `task_id`, `turn_id`, `completed`, `interrupted`, `model`, `platform`. So adapter's `kwargs.get("conversation_history", [])` is always `[]` → `end_session()`'s `if messages:` gate skips `session_reflector.reflect()` → zero keyframes for all real sessions.
+
+**Fix (v1.4.5) — platform-agnostic self-caching**:
+The engine now maintains its own message cache instead of relying on platform hooks:
+
+```python
+# __init__
+self._session_messages: List[Dict[str, Any]] = []
+
+# process() — cache every call
+self._session_messages = messages
+
+# end_session() — fallback to cache
+effective_messages = messages or self._session_messages
+if effective_messages:
+    self.session_reflector.reflect(messages=effective_messages, ...)
+```
+
+**Design principle**: When a platform doesn't provide data the engine needs, make the engine self-sufficient — do NOT write platform-specific adapter hacks. The engine already receives `messages` on every `process()` call; caching it costs zero and works on any platform.
+
+See `references/session-reflector-keyframe-gap.md`.
+
+### Pitfall: Hermes Studio on_session_end fires for every delegate_task completion 🔴
+
+The plugin assumes `on_session_end` fires **once** when the user closes a conversation. In Hermes Studio, it fires for **every delegate_task sub-agent completion** — and `session_id` is the **parent** session, not the sub-agent's. Result: one long session with N delegate_task calls = 2N narrative entries (N real + N garbage with sub-agent keywords like `['user', 'one', 'skills', 'via', 'session']`). 76% of entries originate from this, vs 12% from context compression and 12% from real session end. `_run_deferred_reflection()` only handles 1 pending entry per new session → 98% never enriched. See `references/delegate-task-narrative-backlog.md` for session data and analysis.
 
 ## Delegation
 
@@ -348,13 +406,31 @@ All references are self-contained documents with independent YAML frontmatter. N
 - `references/text-emotion-spec.md` — Text Emotion: Bayesian sentiment classification on character n-grams, language-aware model selection, polarity scoring
 - `references/session-reflector-spec.md` — Session Reflector: end-of-session trigger detection, summary structure (topics/decisions/questions/narrative), storage integration
 
+### Debugging & Operations
+
+- `references/build-reflection-llm-config-mismatch.md` — Hermes v0.18 config format mismatch: `_build_reflection_llm()` failed to find API key, 5-strategy fix
+- `references/session-reflector-llm-gap.md` — Session Reflector: LLM 集成断层（从未调 LLM 生成摘要，narrative 退化为关键词拼装）
+- `references/narrative-memory-gate2-fallback.md` — Gate 2 fallback path: when LLM fails, pending entries get cleared without enrichment
+- `references/narrative-memory-3-gate-debug.md` — 三闸门诊断工作流：结构化排查 narrative memory 从写入到 LLM 感知的每一步
+- `references/delegate-task-narrative-backlog.md` — Hermes Studio delegate_task 导致 on_session_end 重复触发：数据拆解、根因分析、影响链
+- `references/narrative-quality-gate.md` — 叙事记忆写入质量门：三道门过滤 delegate_task/compress 垃圾。配套脚本：`scripts/test_narrative_quality_gate.py`
+- `references/narrative-pipeline-audit.md` — 全链路审计：写→消费→读→注入 五阶段 7 issue 清单（P0-P4），先审后修
+- `references/v1.4.4-pipeline-fixes.md` — v1.4.4 全链路修复记录：P0 读侧 pending 过滤 + P1 批量消费 + P2 降级垃圾跳过/关键帧窗口放大
+- `references/focus-stack-noise-fix.md` — v1.5.10 焦点栈噪声修复：三阶防御（P0 工具输出剥离 + P1 停用词补全 + P2 跨会话状态恢复）
+- `references/session-reflector-keyframe-gap.md` — 🔴 session_reflector 不为真实会话写入 keyframes：根因链、影响分析、4 个排查方向
+- `references/narrative-memory-health-check.md` — 跨会话叙事记忆健康检查：三步诊断（持久化数据 → 意识 XML 注入 → 反射链路），含疑难排查和速查表
+- `references/deployment-verification.md` — Plugin 部署同步验证清单：adapter 同步 + engine 同步 + 三闸门快速诊断
+- `references/plugin-dead-code-audit.md` — Plugin dead code audit results
+- `references/feature-coverage-map.md` — Feature coverage map across engine modules
+- `references/focus-stack-verification.md` — 焦点栈运行时验证：五层动态检测（引擎兼容性 → 焦点栈工作流 → XML 输出 → 持久化 → 当前注入），不需要重启 Hermes
+
 ### Output format
 
 - `references/consciousness-format.md` — Complete XML schema for the `<consciousness>` output block, including both Core Layer and Perception Layer elements, field definitions, validation rules, platform adaptation notes
 - `references/context-window-architecture.md` — Three-layer hierarchical context window design (v1.4.1): HierarchicalContextBuilder + ContextInput + ContextBands. Replaces flat XML assembly. Token budget: ~260 vs ~350 flat. immediate (natural language, zero numbers) / working (brief counts) / background (foldable). Gate 2 replacement via structural isolation.
 - `references/leak-audit.md` — Regex-based XML leak scanner (v1.4.1): verifies zero parameter leaks in `<consciousness>` output. Detects internal parameters (polarity, confidence, ttl), floating-point values, deprecated flat-format tags, and raw heartbeat mode names. PASS/FAIL with structured JSON report.
 - `references/emotion-trend.md` — Emotion trend computation (v1.4.1): fixes `save_emotion_history()` dead code and implements `CogitoEngine._compute_emotion_trend()`. Reads last 3 entries from `emotion_history.jsonl`, checks monotonicity (全递增→上升/全递减→下降/否则平稳).
-- `references/bridge-worker-plugin-gap.md` — Hermes Studio Bridge Worker 插件加载调查：完整证据链、根因分析、修复方案。影响所有依赖 lifecycle hook 的插件。
+- `references/c-space-design.md` — C-Space 思考区设计：活跃概念池、广播总线、内部推理链、元认知层、白熊效应模拟。灵感来自 J-space / Global Workspace Theory，使用飞书文档做设计迭代
 
 ### Reference implementation
 
@@ -362,7 +438,7 @@ All references are self-contained documents with independent YAML frontmatter. N
 
 ### Training
 
-- `references/training-guide.md` — How to prepare positive/negative sample text, run the training script, and replace the default sentiment model with a custom one. Covers data preparation, the `scripts/train_sentiment.py` tool, model validation, and language selection.
+- `references/training-guide.md` — 自定义情绪模型搭建指南。面向 Agent 的标准作业文档：引导用户定义情绪维度 → 套用三层层次化模板（表层→深层→根因，以 SedonaMethod 为范式）→ 生成符合规范的模型文件 → 验证。提供固定架构模板 + 可自定义 DIY 区 + 质量验收标准（格式/精度/边界）。原 SnowNLP 极性训练指南已被此 Agent 面向指南替代——`scripts/train_sentiment.py` 仍可用于 SnowNLP 训练场景。
 
 ### Platform examples
 

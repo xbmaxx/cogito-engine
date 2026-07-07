@@ -1,5 +1,13 @@
 # Cogito Engine 版本更新记录
 
+## v1.4.3 — 2026.07.07
+
+• 叙事记忆质量过滤——delegate_task 和压缩产生的空壳记忆不再写入，只保留真正有内容的会话总结
+• 焦点栈噪声修复——工具输出和英文技术词不再污染 Agent 的焦点话题，跨会话焦点可恢复
+• 会话反射不丢失——引擎自主缓存消息，不再依赖平台传参即可生成会话总结
+
+[下载 v1.4.3](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.4.3.zip) · [tar.gz](https://github.com/xbmaxx/cogito-engine/archive/refs/tags/v1.4.3.tar.gz)
+
 ## v1.4.2 — 2026.07.05
 
 • Agent 现在能感知当前时间和天气了，城市定位自动识别，天气自动获取
