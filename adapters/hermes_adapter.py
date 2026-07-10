@@ -98,7 +98,9 @@ def _find_api_key(
             cp_name = (cp.get("name") or "").lower()
             cp_model = cp.get("model", "")
             # 按名称或模型匹配
-            if cp_name == provider_lower or cp_model == model_id:
+            # v1.5.1-fix: strip 'custom:' prefix for custom provider name matching
+            cp_provider_stripped = provider_lower.replace("custom:", "", 1)
+            if cp_name == provider_lower or cp_name == cp_provider_stripped or cp_model == model_id:
                 api_key = cp.get("api_key", "")
                 if api_key:
                     return (
@@ -201,27 +203,7 @@ def _build_reflection_llm(config_path: str = "") -> Optional[Callable[[str], str
         provider_name, effective_model,
     )
 
-    def _llm(prompt: str) -> str:
-        """调用 LLM 生成 reflection 摘要。"""
-        url = f"{base_url.rstrip('/')}/chat/completions"
-        payload = json.dumps({
-            "model": effective_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 600,
-            "temperature": 0.3,
-        }).encode("utf-8")
-
-        req = urllib.request.Request(url, data=payload, headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        })
-
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-
-        return result["choices"][0]["message"]["content"]
-
-    return _llm
+    return _make_llm_callable(api_key, base_url, effective_model)
 
 
 # ── 四层 Fallback：通用 reflection LLM（适用所有 agent）──
@@ -274,25 +256,66 @@ def _build_universal_reflection_llm() -> Optional[Callable[[str], str]]:
 
 
 def _make_llm_callable(api_key: str, base_url: str, model: str) -> Callable[[str], str]:
-    """构造 LLM callable。"""
+    """构造 LLM callable（自动降级：先试非流式，400→streaming SSE）。"""
     def _llm(prompt: str) -> str:
         endpoint = f"{base_url.rstrip('/')}/chat/completions"
-        payload = json.dumps({
+        payload_bytes = json.dumps({
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 600,
             "temperature": 0.3,
         }).encode("utf-8")
 
-        req = urllib.request.Request(endpoint, data=payload, headers={
+        req = urllib.request.Request(endpoint, data=payload_bytes, headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
         })
 
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+            return result["choices"][0]["message"]["content"]
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            # 流式降级：如果 API 只支持 streaming（如 Copilot/Tencent WorkBuddy）
+            if exc.code == 400 and "stream" in body.lower():
+                payload_stream = json.dumps({
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 600,
+                    "temperature": 0.3,
+                    "stream": True,
+                }).encode("utf-8")
 
-        return result["choices"][0]["message"]["content"]
+                req2 = urllib.request.Request(endpoint, data=payload_stream, headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "text/event-stream",
+                })
+
+                with urllib.request.urlopen(req2, timeout=60) as resp:
+                    raw = resp.read().decode("utf-8", errors="replace")
+
+                # 解析 SSE data: 行
+                text_parts = []
+                for line in raw.split("\n"):
+                    line = line.strip()
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            chunk = json.loads(line[6:])
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                text_parts.append(content)
+                        except json.JSONDecodeError:
+                            pass
+
+                result = "".join(text_parts)
+                if result:
+                    return result
+
+            # 所有方式都失败，向上抛
+            raise
 
     return _llm
 
