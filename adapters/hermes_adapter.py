@@ -224,61 +224,77 @@ def _build_reflection_llm(config_path: str = "") -> Optional[Callable[[str], str
     return _llm
 
 
-# ── 通用 reflection LLM（适用所有 agent：Claude Code / Copilot / Codex / Gemini CLI）──
+# ── 四层 Fallback：通用 reflection LLM（适用所有 agent）──
 
 
-# 常见 agent 环境变量 → provider 映射（按使用频率排序）
-_UNIVERSAL_KEY_MAP: List[tuple] = [
-    ("DEEPSEEK_API_KEY", "deepseek-v4-flash", "https://api.deepseek.com/v1"),
-    ("OPENAI_API_KEY", "gpt-4o-mini", "https://api.openai.com/v1"),
-    ("ANTHROPIC_API_KEY", "claude-3-5-haiku-latest", "https://api.anthropic.com"),
-    ("GOOGLE_API_KEY", "gemini-2.0-flash", "https://generativelanguage.googleapis.com/v1beta"),
-    ("GEMINI_API_KEY", "gemini-2.0-flash", "https://generativelanguage.googleapis.com/v1beta"),
-    ("OPENROUTER_API_KEY", "openai/gpt-4o-mini", "https://openrouter.ai/api/v1"),
-    ("GROQ_API_KEY", "llama-3.1-8b-instant", "https://api.groq.com/openai/v1"),
-]
+# Layer 2 provider 映射：环境变量 → (base_url, model)
+_UNIVERSAL_PROVIDER_MAP: Dict[str, tuple] = {
+    "DEEPSEEK_API_KEY": ("https://api.deepseek.com/v1", "deepseek-chat"),
+    "OPENAI_API_KEY": ("https://api.openai.com/v1", "gpt-4o-mini"),
+    "OPENROUTER_API_KEY": ("https://openrouter.ai/api/v1", "gpt-4o-mini"),
+    "ANTHROPIC_API_KEY": ("https://api.anthropic.com", "claude-3-haiku-20240307"),
+    "GEMINI_API_KEY": ("https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.0-flash"),
+    "GOOGLE_API_KEY": ("https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.0-flash"),
+}
 
 
 def _build_universal_reflection_llm() -> Optional[Callable[[str], str]]:
     """构建通用 reflection LLM——适用于所有 agent adapter。
 
-    按优先级探测当前进程环境变量中常见的 API key，找到第一个可用的。
-    不依赖 Hermes config/.env 路径，任何 agent 的子进程都能用。
+    四层 Fallback 链：
+      Layer 1: COGITO_LLM_API_KEY + COGITO_LLM_BASE_URL + COGITO_LLM_MODEL（专用变量）
+      Layer 2: DEEPSEEK/OPENAI/ANTHROPIC/GEMINI_API_KEY（自动推导）
+      Layer 3: 无 key → 返回 None（engine 跳过 LLM 增强）
+      Layer 4: LLM 调用失败 → 抛异常（调用方处理 pending）
 
     Returns:
         callable 或 None（所有 key 都不可用时）
     """
-    for env_var, model, base_url in _UNIVERSAL_KEY_MAP:
+    # ── Layer 1: 专用环境变量 ──
+    cogito_key = os.environ.get("COGITO_LLM_API_KEY", "")
+    cogito_url = os.environ.get("COGITO_LLM_BASE_URL", "")
+    cogito_model = os.environ.get("COGITO_LLM_MODEL", "")
+    if cogito_key and cogito_url and cogito_model:
+        logger.info("reflection LLM: Layer 1 命中（COGITO_LLM_*, model=%s）", cogito_model)
+        return _make_llm_callable(cogito_key, cogito_url.rstrip("/"), cogito_model)
+
+    # ── Layer 2: 复用已有 API Key ──
+    for env_var, (base_url, model) in _UNIVERSAL_PROVIDER_MAP.items():
         api_key = os.environ.get(env_var, "")
         if api_key:
             logger.info(
-                "reflection LLM: 通用探测成功（env=%s, model=%s）",
+                "reflection LLM: Layer 2 命中（env=%s, model=%s）",
                 env_var, model,
             )
+            return _make_llm_callable(api_key, base_url.rstrip("/"), model)
 
-            def _llm(prompt: str, _key=api_key, _url=base_url, _model=model) -> str:
-                endpoint = f"{_url.rstrip('/')}/chat/completions"
-                payload = json.dumps({
-                    "model": _model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 600,
-                    "temperature": 0.3,
-                }).encode("utf-8")
-
-                req = urllib.request.Request(endpoint, data=payload, headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {_key}",
-                })
-
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    result = json.loads(resp.read().decode("utf-8"))
-
-                return result["choices"][0]["message"]["content"]
-
-            return _llm
-
-    logger.debug("reflection LLM: 通用探测未找到任何 API key")
+    # ── Layer 3: 无 key ──
+    logger.debug("reflection LLM: 所有 key 均不可用（Layer 3）")
     return None
+
+
+def _make_llm_callable(api_key: str, base_url: str, model: str) -> Callable[[str], str]:
+    """构造 LLM callable。"""
+    def _llm(prompt: str) -> str:
+        endpoint = f"{base_url.rstrip('/')}/chat/completions"
+        payload = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 600,
+            "temperature": 0.3,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(endpoint, data=payload, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        })
+
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+
+        return result["choices"][0]["message"]["content"]
+
+    return _llm
 
 
 # ── HermesAdapter 主类 ──
@@ -307,6 +323,9 @@ class HermesAdapter:
 
         # 构建 reflection LLM（从 Hermes config 读取当前模型）
         reflection_llm = _build_reflection_llm()
+        # Fallback: 当 config 匹配不到 key 时，尝试通用环境变量探测
+        if reflection_llm is None:
+            reflection_llm = _build_universal_reflection_llm()
 
         self.engine = CogitoEngine(
             include_weather=include_weather,

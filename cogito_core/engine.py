@@ -37,6 +37,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .ticker import Ticker
 from .focus_stack import FocusStack
+import re
+
 from .temporal import get_period
 from .self_perception import compute_self_perception
 from .emotion_registry import EmotionModelRegistry
@@ -62,6 +64,24 @@ _GARBAGE_PATTERNS = [
     {"user", "one", "skills", "via", "session"},     # delegate_task 子代理
     {"checkpoint", "Generate", "context", "summary"}, # context 压缩
 ]
+
+# 模板句式垃圾摘要检测（正则匹配）
+_GARBAGE_TEMPLATES: List[str] = [
+    r"讨论了?.+等话题",
+    r"涉及了?.+等方?面?",
+    r"关于.+等内容",
+    r"主要讨论了?",
+    r"本期.+涉及",
+    r"[^，。]*?等多[^，。]*",  # "agent、task、skill 等多种/多个…"
+]
+
+# 中文动词特征词——有这些说明摘要包含实际语义，不是纯关键词拼接
+_CHINESE_VERB_MARKERS: set = {
+    "了", "过", "进行", "完成", "需要", "发现", "确认",
+    "建议", "修复", "优化", "添加", "删除", "修改",
+    "分析", "确认", "验证", "对比", "测试", "排查",
+    "解决", "提出", "决定", "计划", "准备", "正在",
+}
 
 
 # ── 引擎状态类型 ──
@@ -595,11 +615,11 @@ class CogitoEngine:
         Returns:
             True 表示应该写入叙事记忆
         """
-        # 门 1: 焦点栈深度 ≥ 3
+        # 门 1: 焦点栈深度 ≥ 2（原为 ≥ 3）
         depth = len(state.focus_stack.stack) if state.focus_stack.stack else 0
-        if depth < 3:
+        if depth < 2:
             logger.debug(
-                "叙事记忆质量门拒绝: depth=%d < 3, session=%s",
+                "叙事记忆质量门拒绝: depth=%d < 2, session=%s",
                 depth, state.session_id,
             )
             return False
@@ -633,9 +653,11 @@ class CogitoEngine:
         """轻量垃圾检查。
 
         与 _should_write_narrative 的完整三道门不同，此方法仅检查
-        text 是否命中以下任意垃圾判定条件：
-        - 关键词模式匹配（≥3 个关键词命中 _GARBAGE_PATTERNS）
-        - 模板垃圾句式："讨论了...等话题"
+        text 是否为「关键词拼接型」垃圾摘要。三档检测：
+
+        档 1: 模板句式（"讨论了…等话题"等正则匹配）
+        档 2: 关键词拼接 heuristic（高逗号密度 + 短文本 + 无中文动词）
+        档 3: 过短文本（< 15 字符）
 
         Args:
             text: 待检查的文本
@@ -645,15 +667,36 @@ class CogitoEngine:
         """
         if not text:
             return False
-        # 模板句式检查：讨论了...等话题
         text_lower = text.lower().strip()
-        if text_lower.startswith("讨论了") or "等话题" in text_lower:
+
+        # ── 档 1: 模板句式检测（正则） ──
+        for pattern in _GARBAGE_TEMPLATES:
+            if re.search(pattern, text_lower):
+                logger.debug("垃圾摘要: 命中模板句式 pattern=%r", pattern)
+                return True
+
+        # ── 档 2: 关键词拼接 heuristic ──
+        # 特征：短文本 + 高逗号密度 + 无中文动词
+        cn_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+        comma_count = text.count("，") + text.count(",") + text.count("、")
+        has_verb = any(marker in text_lower for marker in _CHINESE_VERB_MARKERS)
+
+        if len(text) < 80 and comma_count >= 2 and not has_verb:
+            logger.debug("垃圾摘要: 关键词拼接 len=%d commas=%d cn=%d",
+                         len(text), comma_count, cn_chars)
             return True
-        # 关键词模式检查
+
+        # ── 档 3: 过短文本 ──
+        if len(text) < 15:
+            return True
+
+        # ── 档 4: 原有关键词模式匹配（已有 _GARBAGE_PATTERNS） ──
         for pattern in _GARBAGE_PATTERNS:
             hits = sum(1 for kw in pattern if kw.lower() in text_lower)
             if hits >= 3:
+                logger.debug("垃圾摘要: 关键词模式 hits=%d", hits)
                 return True
+
         return False
 
     def end_session(

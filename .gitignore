@@ -5,3 +5,5 @@ __pycache__/
 dist/
 build/
 .cogito/
+scripts/baseline.json
+scripts/results/
