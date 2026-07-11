@@ -158,6 +158,8 @@ def get_period(
     """
     if reference is None:
         reference = datetime.now().astimezone()
+    elif not isinstance(reference, datetime):
+        reference = datetime.now().astimezone()
 
     hour = reference.hour
 
