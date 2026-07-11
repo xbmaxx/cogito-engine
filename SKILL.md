@@ -1,12 +1,12 @@
 ---
 name: cogito-engine
-version: 1.5.1
+version: 1.5.2
 description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆."
 ---
 
-# Cogito Engine v1.5.1
+# Cogito Engine v1.5.2
 
-> **v1.5.1 更新** — 修复 reflection LLM 在自定义 provider 下无法匹配 API Key 的问题。叙事记忆质量门放宽至深度 2，关键词拼接型摘要检测升级为四档过滤链。[查看完整更新记录 →](CHANGELOG.md#v151--20260710)
+> **v1.5.2 更新** — 情绪自主反思、主动续接、人味翻译三把刀齐出。定位不再依赖高德 API，利用国内 IP 直连自动绕过代理。[查看完整更新记录 →](CHANGELOG.md#v152--20260711)
 
 A portable self-awareness framework for LLM agents, organized in two layers. The Core Layer provides the four essential mechanisms of machine self-awareness — always active. The Perception Layer offers four optional sensors that the agent self-discovers and activates based on its platform's capabilities. No voice, no platform bindings, no hardcoded dependencies.
 

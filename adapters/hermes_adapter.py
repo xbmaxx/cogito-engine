@@ -397,6 +397,13 @@ class HermesAdapter:
             if not messages:
                 return None
 
+            logger.info(
+                "pre_llm_call: session=%s turn=%s history=%d条",
+                kwargs.get("session_id", ""),
+                kwargs.get("turn_id", "")[:16],
+                len(messages),
+            )
+
             session_id: str = kwargs.get("session_id", "")
 
             # 恢复/创建引擎状态（使用实例属性跨 turn 持久化）

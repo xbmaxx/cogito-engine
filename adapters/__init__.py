@@ -3,8 +3,16 @@
 import sys
 from pathlib import Path
 
-# Ensure cogito_core is importable from ~/.cogito
-sys.path.insert(0, str(Path.home() / ".cogito"))
+# Ensure cogito_core is importable from the plugin directory itself
+# (Hermes loads __init__.py via importlib; sys.path may not include it)
+_THIS_DIR = str(Path(__file__).resolve().parent)
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+
+# Ensure cogito_core is also importable from ~/.cogito (legacy installs)
+_COGITO_DIR = str(Path.home() / ".cogito")
+if _COGITO_DIR not in sys.path:
+    sys.path.insert(0, _COGITO_DIR)
 
 # Redirect all persistence to Hermes's memory directory (before any engine import)
 from cogito_core.persistence import set_cogito_home as _set_persistence_home

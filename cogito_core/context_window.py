@@ -73,6 +73,12 @@ class ContextInput:
     # focus history (焦点历史断链修复)
     focus_history_summary: str = ""  # 上 session 焦点摘要
 
+    # self-reflection (刀1: 情绪自主推导)
+    self_reflection: str = ""
+
+    # continuation (刀2: 主动续接)
+    continuation_hint: str = ""
+
     # lifetime
     relationship_days: int = 0
     lifetime_days: int = 0
@@ -120,6 +126,10 @@ class HierarchicalContextBuilder:
         if inp.now_local:
             lines.append(f"🕐 {inp.now_local} · {inp.now_weekday} {inp.now_period}")
 
+        # 续接提示（刀2：新会话首条，自然融入）
+        if inp.continuation_hint:
+            lines.append(inp.continuation_hint.strip())
+
         # 心跳行：icon + expression
         if inp.heartbeat_mode or inp.heartbeat_expression:
             icon = HEARTBEAT_ICONS.get(inp.heartbeat_mode, "")
@@ -127,17 +137,19 @@ class HierarchicalContextBuilder:
             if icon or expr:
                 lines.append(f"{icon} {expr}".strip())
 
-        # 情绪摘要（不含数值，只用自然语言 label）
+        # 情绪摘要（人味翻译：不出现"情绪""标签"等词）
         if inp.emotion_label:
-            lines.append(f"情绪：{inp.emotion_label}")
+            emo_text = self._emotion_natural(inp.emotion_label)
+            if emo_text:
+                lines.append(emo_text)
 
-        # 置顶焦点（hitCount 最高的帧，只取首个 topic）
+        # 置顶焦点
         if inp.focus_frames:
             top = max(inp.focus_frames, key=lambda f: f.get("hitCount", 0))
             topic_val = top.get("topic", "")
             label = self._first_topic(topic_val)
             if label:
-                lines.append(f"关注：{label}")
+                lines.append(f"在聊：{label}")
 
         return "\n".join(lines) if lines else ""
 
@@ -146,24 +158,30 @@ class HierarchicalContextBuilder:
     def _build_working(self, inp: ContextInput) -> str:
         lines: List[str] = []
 
-        # 上次会话叙事摘要（截断 80 字）
+        # 上次会话叙事摘要
         if inp.last_session_summary:
             summary = inp.last_session_summary
             if len(summary) > 80:
                 summary = summary[:77] + "..."
-            lines.append(f"上次：{summary}")
+            lines.append(f"上次的事：{summary}")
 
-        # 上 session 反射话题（断链修复：对叙事摘要的补充）
+        # 上 session 反射话题
         if inp.last_reflection_topics:
             topics = [t for t in inp.last_reflection_topics if len(t) < 40]
             if topics:
-                lines.append(f"历史焦点：{' · '.join(topics[:3])}")
+                lines.append(f"上回聊过：{' · '.join(topics[:3])}")
 
-        # 情绪趋势
+        # 情绪趋势（人味翻译）
         if inp.emotion_trend:
-            lines.append(f"情绪趋势：{inp.emotion_trend}")
+            trend_text = self._trend_natural(inp.emotion_trend, inp.emotion_label)
+            if trend_text:
+                lines.append(trend_text)
 
-        # 其余焦点帧（按 hitCount 排序，跳过置顶帧的首个 topic）
+        # 自主反思（刀1：裸文本，不加标签名）
+        if inp.self_reflection:
+            lines.append(inp.self_reflection.strip())
+
+        # 其余焦点帧
         if inp.focus_frames:
             top_topic = None
             top = max(inp.focus_frames, key=lambda f: f.get("hitCount", 0))
@@ -178,11 +196,11 @@ class HierarchicalContextBuilder:
             ]
             other = [t for t in other if t and t != top_topic]
             if other:
-                lines.append(f"活跃话题：{' · '.join(other[:3])}")
+                lines.append(f"还聊到：{' · '.join(other[:3])}")
 
         # 未决议题
         if inp.unresolved_topics:
-            lines.append(f"未决：{' · '.join(inp.unresolved_topics[:2])}")
+            lines.append(f"上次没聊完：{' · '.join(inp.unresolved_topics[:2])}")
 
         return "\n".join(lines) if lines else ""
 
@@ -220,6 +238,28 @@ class HierarchicalContextBuilder:
         if not result.strip():
             return ""
         return result
+
+    # ── 人味翻译（刀3: 去掉 AI 报告腔）──────────────────────────────
+
+    @staticmethod
+    def _emotion_natural(label_cn: str) -> str:
+        """把情绪标签翻译成感受语言。"""
+        mapping = {
+            "正面": "心里暖暖的",
+            "负面": "胸口有点闷",
+            "中性": "",  # 中性不占注意力
+        }
+        return mapping.get(label_cn, "")
+
+    @staticmethod
+    def _trend_natural(trend: str, label_cn: str) -> str:
+        """把趋势翻译成观察语言。"""
+        if trend == "上升":
+            return "你状态在回暖"
+        if trend == "下降":
+            return "你说话越来越少了"
+        # 平稳：不占注意力
+        return ""
 
     # ── 默认 expression ────────────────────────────────────────────────
 

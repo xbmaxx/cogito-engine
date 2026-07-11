@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
-SNAPSHOT_PATH = os.path.expanduser("~/.hermes/cogito/heartbeat_snapshots.jsonl")
+SNAPSHOT_PATH = os.path.expanduser("~/.hermes/memory/heartbeat_snapshots.jsonl")
 MAX_SNAPSHOTS = 200
 
 
@@ -36,6 +36,7 @@ def save_snapshot(result: Dict[str, Any]) -> None:
             "trigger": result.get("trigger", ""),
             "expression": result.get("expression", ""),
             "locked": result.get("locked", False),
+            "reflection_text": result.get("reflection_text", ""),
         }
 
         # 读已有记录

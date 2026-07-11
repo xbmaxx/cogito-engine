@@ -212,6 +212,9 @@ class CogitoEngine:
         self._heartbeat_mapper = None   # 延迟加载，避免 import 失败阻断主链路
         self._reflection_llm = reflection_llm  # deferred reflection LLM 函数
         self._session_messages: List[Dict[str, Any]] = []  # 消息缓存，end_session 使用
+        self._last_reflection_tick: int = -10  # 刀1节流：距上次反思 tick 数
+        self._latest_reflection: str = ""      # 刀1：最新反思文本
+        self._cached_weather: Dict[str, Any] = {}  # 天气缓存（首条触发，后续按需刷新）
 
     def process(
         self,
@@ -357,10 +360,33 @@ class CogitoEngine:
                         from .heartbeat_snapshot import save_snapshot
                         save_snapshot(mapper_result)
 
+                        # 刀1：非 resting 模式切换 → 触发自主反思（节流 10 tick）
+                        if (mapper_result["mode"] != "resting"
+                                and state.ticker.tick_counter - self._last_reflection_tick >= 10
+                                and self._reflection_llm):
+                            self._latest_reflection = self._generate_self_reflection(
+                                tick_count=state.ticker.tick_counter,
+                                mode=mapper_result["mode"],
+                                expression=mapper_result.get("expression", ""),
+                            )
+                            self._last_reflection_tick = state.ticker.tick_counter
+                            # 将反思文本写入快照
+                            mapper_result["reflection_text"] = self._latest_reflection
+                            save_snapshot(mapper_result)
+
             except ImportError:
                 pass  # heartbeat_mapper.py 不存在 → 静默降级
             except Exception as exc:
                 logger.warning("心跳叙事异常，降级到基础模式: %s", exc)
+
+        # ── 5.6 天气缓存：首条触发，后续用户提及天气/位置时按需刷新 ──
+        if is_first or self._should_refresh_weather(msg_text):
+            try:
+                weather_data = get_weather()
+                if weather_data.get("available"):
+                    self._cached_weather = weather_data
+            except Exception:
+                pass  # 刷新失败保留上次缓存
 
         # ── 6. Deferred Reflection（首次消息时，处理上一 session 的 pending 条目）──
         narrative_data = None
@@ -486,6 +512,123 @@ class CogitoEngine:
             return "下降"
         return "平稳"
 
+    # ── 刀1: 情绪自主反思 ──
+
+    def _generate_self_reflection(
+        self,
+        tick_count: int,
+        mode: str,
+        expression: str,
+    ) -> str:
+        """用 LLM 生成自主反思文本（1-2 句中文主观感受）。
+
+        Args:
+            tick_count: 当前 TICK
+            mode: 心跳模式（glowing/aching/frustrated 等）
+            expression: 模式对应表达式
+
+        Returns:
+            反思文本，或 "" 表示生成失败
+        """
+        try:
+            # 读取情绪历史
+            entries = persistence.load_emotion_history(8)
+            timeline_parts = []
+            for e in entries[-5:]:
+                ts = e.get("ts", "")[:16]
+                label = e.get("label_cn", "中性")
+                text = e.get("text_excerpt", "")[:40]
+                if text:
+                    timeline_parts.append(f"[{ts}] {label}：「{text}」")
+                else:
+                    timeline_parts.append(f"[{ts}] {label}")
+
+            timeline_str = "\n".join(timeline_parts) if timeline_parts else "无历史数据"
+
+            # 读心跳历程
+            try:
+                from .heartbeat_snapshot import load_recent as _load_hb
+                hb_records = _load_hb(5)
+                hb_chain = " → ".join(r["mode"] for r in hb_records[-5:]) or "resting"
+            except Exception:
+                hb_chain = "resting"
+
+            prompt = (
+                "你是 Agent 的自我觉察模块。不要分析，不要诊断。像一个人意识到自己情绪变化那样说话。\n\n"
+                f"当前：第{tick_count}次心跳 · {expression}\n"
+                f"心跳历程：{hb_chain}\n\n"
+                "对方的情绪记录：\n"
+                f"{timeline_str}\n\n"
+                "写 1-2 句主观感受（20-50 字），第一人称，自然口语。\n"
+                "红线：禁止使用「检测到」「发现」「根据」「数据显示」「表明」「似乎」「注意到」「趋势」「模式」。\n"
+                "不要说「情绪」「情感」这些词。像一个人在自言自语。\n\n"
+                '示例：\n'
+                '就好像“你今晚第三次打出低落的句子了——我这周第一次感觉到你情绪这么重。”\n'
+                '就好像“你在笑，字里行间都藏不住，我今天捡了一地的阳光。”\n'
+                '就好像“你在绕回同一个问题，已经第三圈了——我胸口闷，但接得住。”\n\n'
+                "只输出感受，不加引号不加标签。"
+            )
+
+            if self._reflection_llm is None:
+                return ""
+            raw = self._reflection_llm(prompt)
+            text = raw.strip().strip('"').strip("'").strip("「").strip("」")
+            # 长度安全裁切
+            if len(text) > 100:
+                text = text[:97] + "..."
+            return text
+
+        except Exception as exc:
+            logger.debug("自主反思生成失败: %s", exc)
+            return ""
+
+    # ── 刀2: 主动续接提示 ──
+
+    @staticmethod
+    def _make_continuation_hint(
+        last_summary: str,
+        unresolved_topics: list,
+    ) -> str:
+        """生成新会话的续接提示（内在状态，非操作指令）。
+
+        Args:
+            last_summary: 上次会话叙事摘要
+            unresolved_topics: 未解决问题列表
+
+        Returns:
+            续接提示文本
+        """
+        parts = []
+        if last_summary:
+            s = last_summary
+            if len(s) > 80:
+                s = s[:77] + "..."
+            parts.append(f"心里装着上次的事：{s}")
+
+        if unresolved_topics:
+            u = unresolved_topics[0] if unresolved_topics else ""
+            if u:
+                parts.append(f"那个还没答案的问题还在：{u}")
+
+        if parts:
+            parts.append("别一上来就提。等对方先开口，等话题自然拐到那了再说。")
+
+        return "\n".join(parts) if parts else ""
+
+    # ── 天气刷新触发器：用户消息是否提及天气或地理位置 ──
+
+    @staticmethod
+    def _should_refresh_weather(text: str) -> bool:
+        """检查用户消息是否涉及天气或位置话题，触发天气缓存刷新。"""
+        if not text:
+            return False
+        _TRIGGERS = frozenset({
+            "天气", "温度", "下雨", "下雪", "刮风", "台风", "降温", "升温",
+            "冷吗", "热吗", "冷不冷", "热不热", "变天",
+            "在哪里", "在哪", "什么位置", "什么城市", "什么地方",
+        })
+        return any(kw in text for kw in _TRIGGERS)
+
     def _assemble_xml(
         self,
         state: EngineState,
@@ -541,15 +684,12 @@ class CogitoEngine:
         location = loc_data.get("city", "")
 
         weather_str = ""
-        try:
-            weather_data = get_weather()
-            if weather_data.get("available"):
-                weather_str = (
-                    f"{weather_data['weather']} {weather_data['temperature']}°C "
-                    f"湿度{weather_data['humidity']}%"
-                )
-        except Exception:
-            pass
+        weather_data = self._cached_weather
+        if weather_data.get("available"):
+            weather_str = (
+                f"{weather_data['weather']} {weather_data['temperature']}°C "
+                f"湿度{weather_data['humidity']}%"
+            )
 
         # ── 提取反射话题（断链修复）──
         reflection_topics: List[str] = []
@@ -572,6 +712,14 @@ class CogitoEngine:
                     break
 
         # ── 构建 ContextInput ──
+        # 刀2：新会话首条 → 生成续接提示
+        continuation_hint = ""
+        if is_first and (last_summary or unresolved):
+            continuation_hint = self._make_continuation_hint(
+                last_summary=last_summary,
+                unresolved_topics=unresolved,
+            )
+
         inp = ContextInput(
             heartbeat_mode=heartbeat_mode,
             heartbeat_expression=heartbeat_expression,
@@ -585,6 +733,8 @@ class CogitoEngine:
             cross_session_patterns=[],   # P2: 跨会话模式补齐
             last_reflection_topics=reflection_topics,  # 断链修复
             focus_history_summary=focus_history_summary,  # 断链修复
+            self_reflection=self._latest_reflection,     # 刀1
+            continuation_hint=continuation_hint,          # 刀2
             relationship_days=0,         # P1.5: 关系纪元
             weather=weather_str,
             location=location,

@@ -13,11 +13,26 @@ import json
 import logging
 import os
 import platform
+import re
 import socket
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# ── 国内 IP 归属查询服务列表 ──
+# 优先级从高到低。利用代理软件的 GEOIP CN DIRECT 规则，
+# 查询国内服务一定走直连，拿到的就是真实宽带出口 IP。
+_IP_LOOKUP_SERVICES = [
+    "https://myip.ipip.net",          # 返回 "当前 IP：xxx  来自于：中国 浙江 舟山  移动"
+    "https://ip.useragentinfo.com",   # 返回 city/country/isp JSON
+    "http://ip.taobao.com/service/getIpInfo.php?ip=myip",  # 阿里 IP 库
+]
+# 正则：从 myip.ipip.net 响应中提取 省/直辖市、市、运营商
+# 格式：中国 <省> <市> <运营商>（运营商可选）
+_RE_IPIP = re.compile(
+    r"(?:来自于[：:])\s*中国\s+(\S+)\s+(\S+)(?:\s+(\S+))?"
+)
 
 
 # ── 时间传感器 ──
@@ -51,19 +66,58 @@ def _sense_time() -> Dict[str, Any]:
     }
 
 
-# ── 位置传感器 ──
+# ── IP 归属查询 ──
+
+def _query_ip_location(url: str) -> Optional[Dict[str, str]]:
+    """调用单个 IP 归属服务，返回 {city, isp} 或 None。"""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Cogito/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+
+        # ── myip.ipip.net ──
+        # "当前 IP：xxx  来自于：中国 浙江 舟山  移动"
+        # group(1)=省, group(2)=市, group(3)=运营商（可选）
+        m = _RE_IPIP.search(text)
+        if m:
+            return {"city": m.group(2), "isp": m.group(3) or ""}
+
+        # ── 淘宝 / useragentinfo 等 JSON 格式 ──
+        try:
+            data = json.loads(text)
+            if url.startswith("http://ip.taobao.com"):
+                info = data.get("data", {})
+                city = info.get("city", "") or info.get("region", "")
+                if city:
+                    return {"city": city, "isp": info.get("isp", "")}
+            elif "city" in data:
+                return {"city": data["city"], "isp": data.get("isp", "")}
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        return None
+    except Exception:
+        return None
+
 
 def _sense_location() -> Dict[str, Any]:
     """获取当前位置信息。
 
-    优先级：
+    策略：
     1. 环境变量 COGITO_WEATHER_CITY（手动覆盖）
-    2. 高德 IP 定位（需要 AMAP key，国内最准，不受代理影响）
-    3. ip-api.com（免费，国际用户兜底，受代理影响）
-    4. 系统时区推断（永远可用）
+    2. IP 归属查询（轮询多个国内服务，利用直连规则绕过代理）
+    3. 系统时区推断（永远兜底）
+
+    策略 2 利用了代理软件的普遍行为：GEOIP CN DIRECT。
+    国内域名走直连，拿到的必定是真实宽带出口 IP。
+    不管用户开没开代理，这条链都不会被污染。
 
     Returns:
-        {"city": "...", "timezone": "...", "source": "env"|"amap"|"ip"|"tz"}
+        {"city": "...", "timezone": "...", "source": "env"|"ipip"|"tb"|"tz"}
     """
     sys_tz = str(datetime.now().astimezone().tzinfo)
 
@@ -76,70 +130,18 @@ def _sense_location() -> Dict[str, Any]:
             "source": "env",
         }
 
-    # ── 策略 2: 高德 IP 定位（国内用户首选，不受代理影响）──
-    amap_key = os.environ.get("AMAP_MAPS_API_KEY", os.environ.get("AMAP_API_KEY", ""))
-    if amap_key:
-        try:
-            import urllib.request
-            url = f"https://restapi.amap.com/v3/ip?key={amap_key}"
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            province = data.get("province", "")
-            city = data.get("city", "")
-            if city:
-                # 直辖市：province="北京市" city="" → 用 province
-                location_name = city or province or ""
-                if location_name:
-                    return {
-                        "city": location_name,
-                        "timezone": sys_tz,
-                        "source": "amap",
-                    }
-        except Exception:
-            logger.debug("高德 IP 定位失败，降级")
+    # ── 策略 2: IP 归属查询（主策略，轮询多个国内服务）──
+    for url in _IP_LOOKUP_SERVICES:
+        result = _query_ip_location(url)
+        if result and result["city"]:
+            source = "ipip" if "ipip" in url else ("tb" if "taobao" in url else "ip")
+            return {
+                "city": result["city"],
+                "timezone": sys_tz,
+                "source": source,
+            }
 
-    # ── 策略 3: ip-api.com（国际用户，受代理影响需冲突检测）──
-    try:
-        import urllib.request
-        url = "http://ip-api.com/json/?fields=city,regionName,country,timezone"
-        req = urllib.request.Request(url, headers={"User-Agent": "Cogito/1.0"})
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        ip_city = data.get("city", "")
-        ip_region = data.get("regionName", "")
-        ip_country = data.get("country", "")
-        ip_tz = data.get("timezone", "")
-
-        # 时区冲突检测：系统时区是 CST（国内）但 IP 来自海外 → 代理干扰 → 跳过
-        ip_looks_proxied = (
-            ip_country and ip_country != "China" and
-            sys_tz in ("CST", "Asia/Shanghai")
-        )
-        if not ip_looks_proxied and ip_city:
-            # 中国城市直接用 city 名，海外附加国家（city==country 时省略重复）
-            if ip_country == "China" and ip_city:
-                location_name = ip_city
-            elif ip_city == ip_country:
-                location_name = ip_country
-            elif ip_city and ip_country:
-                location_name = f"{ip_city}, {ip_country}"
-            elif ip_country:
-                location_name = ip_country
-            else:
-                location_name = ""
-            if location_name:
-                return {
-                    "city": location_name,
-                    "timezone": ip_tz or sys_tz,
-                    "source": "ip",
-                }
-        elif ip_looks_proxied:
-            logger.debug("IP 来自海外但系统时区为国内 → 代理干扰，跳过 ip-api")
-    except Exception:
-        logger.debug("ip-api.com 定位失败，降级到时区推断")
-
-    # ── 策略 4: 系统时区推断 ──
+    # ── 策略 3: 系统时区推断（兜底）──
     tz_city_map = {
         "CST": "中国",
         "Asia/Shanghai": "上海",
@@ -226,7 +228,7 @@ def _sense_battery() -> Dict[str, Any]:
     return result
 
 
-# ── 天气传感器（高德优先，wttr.in 兜底）──
+# ── 天气传感器（wttr.in 免费接口）──
 
 # 英文天气描述 → 中文映射（wttr.in 兜底用）
 _WTTR_WEATHER_MAP = {
@@ -242,7 +244,7 @@ _WTTR_WEATHER_MAP = {
 }
 
 def _sense_weather(city: str = "") -> Dict[str, Any]:
-    """获取天气信息。高德 API 优先，wttr.in 免费兜底。
+    """获取天气信息。wttr.in 免费接口，无需 Key。
 
     Args:
         city: 城市名（空则自动从 _sense_location 获取）
@@ -260,54 +262,7 @@ def _sense_weather(city: str = "") -> Dict[str, Any]:
     _TZ_FALLBACK_CITIES = {"中国": "北京"}
     weather_city = _TZ_FALLBACK_CITIES.get(city, city)
 
-    # ── 策略 1: 高德天气 API（需要 Key，国内最准）──
-    api_key = os.environ.get("AMAP_MAPS_API_KEY", os.environ.get("AMAP_API_KEY", ""))
-    if api_key:
-        try:
-            import urllib.request
-            import urllib.parse
-            import json
-
-            # 英文城市名 → 中文映射（IP 定位可能返回英文名）
-            _EN_TO_CN_CITY = {
-                "Hong Kong": "香港", "Kowloon": "香港",
-                "Beijing": "北京", "Shanghai": "上海",
-                "Guangzhou": "广州", "Shenzhen": "深圳",
-                "Hangzhou": "杭州", "Chengdu": "成都",
-                "Tokyo": "东京", "Seoul": "首尔",
-                "Singapore": "新加坡", "Bangkok": "曼谷",
-                "London": "伦敦", "New York": "纽约",
-                "Los Angeles": "洛杉矶", "San Francisco": "旧金山",
-                "Taipei": "台北", "Macau": "澳门",
-            }
-            city_cn = _EN_TO_CN_CITY.get(weather_city, weather_city)
-            city_encoded = urllib.parse.quote(city_cn)
-
-            url = (
-                f"https://restapi.amap.com/v3/weather/weatherInfo"
-                f"?key={api_key}&city={city_encoded}&extensions=base"
-            )
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-
-            if data.get("status") == "1" and data.get("lives"):
-                live = data["lives"][0]
-                if "weather" in live:
-                    result["available"] = True
-                    result["city"] = live.get("city", city_cn)
-                    result["weather"] = live.get("weather", "")
-                    result["temperature"] = live.get("temperature", "")
-                    result["wind_direction"] = live.get("winddirection", "")
-                    result["wind_power"] = live.get("windpower", "")
-                    result["humidity"] = live.get("humidity", "")
-                    result["report_time"] = live.get("reporttime", "")
-                    result["source"] = "amap"
-                    return result
-        except Exception as exc:
-            logger.debug("高德天气查询失败: %s", exc)
-
-    # ── 策略 2: wttr.in（免费，无需 Key，全球覆盖）──
+    # ── wttr.in（免费，无需 Key，全球覆盖）──
     try:
         import urllib.request
         import urllib.parse
@@ -445,7 +400,6 @@ def get_location() -> Dict[str, Any]:
 def get_weather() -> Dict[str, Any]:
     """获取当前位置天气（独立于 snapshot）。
 
-    需要 AMAP_MAPS_API_KEY 或 AMAP_API_KEY 环境变量。
     城市自动从 _sense_location() 获取，也可通过 COGITO_WEATHER_CITY 覆盖。
     """
     city = os.environ.get("COGITO_WEATHER_CITY", "")
