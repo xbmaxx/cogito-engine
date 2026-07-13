@@ -51,6 +51,10 @@ from . import persistence
 # ── 环境传感器 ──
 from .env_sensor import get_snapshot as get_env_snapshot
 
+# ── KnowledgeBridge ──
+from .knowledge_provider import KnowledgeProvider
+from .fact_store_provider import FactStoreProvider
+
 __all__ = [
     # 引擎
     "CogitoEngine",
@@ -73,6 +77,9 @@ __all__ = [
     "EmotionModelRegistry",
     "EmotionClassifier",
     "get_env_snapshot",
+    # KnowledgeBridge
+    "KnowledgeProvider",
+    "FactStoreProvider",
     # 记忆
     "KeyframeExtractor",
     "estimate_conversation_rounds",
@@ -82,4 +89,4 @@ __all__ = [
     "persistence",
 ]
 
-__version__ = "1.5.2"
+__version__ = "1.5.3"

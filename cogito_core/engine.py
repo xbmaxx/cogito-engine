@@ -216,6 +216,15 @@ class CogitoEngine:
         self._latest_reflection: str = ""      # 刀1：最新反思文本
         self._cached_weather: Dict[str, Any] = {}  # 天气缓存（首条触发，后续按需刷新）
 
+        # ── 信息设计：触发指令系统 ──
+        self._previous_emotion_label: Optional[str] = None  # 上一轮情绪标签
+        self._emotion_trend_count: int = 0  # 趋势连续同向轮数
+        self.knowledge_provider: Optional[Any] = None  # KnowledgeBridge 提供者（延迟设置）
+
+    def set_knowledge_provider(self, provider) -> None:
+        """设置 KnowledgeBridge 提供者。"""
+        self.knowledge_provider = provider
+
     def process(
         self,
         messages: List[Dict[str, Any]],
@@ -430,6 +439,42 @@ class CogitoEngine:
             except Exception as exc:
                 logger.debug("焦点历史加载失败: %s", exc)
 
+        # ── 信息设计：触发指令生成 ──
+        emo_trend = self._compute_emotion_trend()
+        msg_info = self._analyze_user_message(messages)
+        msg_info["is_first_turn"] = is_first
+
+        # 提取情绪标签
+        emo_label = ""
+        if emo_result and emo_result.get("available"):
+            emo_label = emo_result.get("label_cn", "")
+
+        emotion_trigger = self._build_emotion_trigger(emo_label, emo_trend)
+
+        # 提取叙事数据
+        last_summary = ""
+        unresolved: List[str] = []
+        if narrative_data and is_first:
+            first_entry = narrative_data[0] if narrative_data else {}
+            last_summary = first_entry.get("summary", "")
+            for n in narrative_data:
+                u = n.get("unresolved", "")
+                if u and u != "无":
+                    unresolved.append(u)
+
+        narrative_trigger = self._build_narrative_trigger(
+            last_summary, unresolved, is_first
+        )
+        kb_triggers = self._build_kb_triggers(
+            self._extract_query(messages)
+        )
+
+        # ── 触发指令仅保留 KB（不重复注入 narrative/emotion）──
+        # narrative/emotion 的核心信息已在 working/immediate 层表达，
+        # 将同一条信息以指令形式再放入 background 层是 token 浪费。
+        # KB 事实仅在 background 层出现，不与其他层重复，可安全注入。
+        kb_triggers_only = kb_triggers if kb_triggers else []
+
         # ── 9. 组装 XML ──
         xml = self._assemble_xml(
             state=state,
@@ -443,6 +488,8 @@ class CogitoEngine:
             heartbeat_line=heartbeat_line,
             heartbeat_mode=heartbeat_mode,
             heartbeat_expression=heartbeat_expression,
+            cross_session_patterns=kb_triggers_only,
+            emo_trend=emo_trend,
         )
 
         # 缓存消息供 end_session 使用（平台无关）
@@ -511,6 +558,181 @@ class CogitoEngine:
         if dec:
             return "下降"
         return "平稳"
+
+    # ── 信息设计：触发指令系统 ──
+
+    def _analyze_user_message(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """分析用户消息特征。
+
+        Returns:
+            {'length': int, 'is_question': bool, 'is_short': bool,
+             'keywords': str, 'is_first_turn': bool}
+        """
+        last = self._find_last_user_msg(messages)
+        if not last:
+            return {
+                "length": 0, "is_question": False, "is_short": True,
+                "keywords": "", "is_first_turn": False,
+            }
+
+        content = last.get("content", "")
+        return {
+            "length": len(content),
+            "is_question": (
+                "?" in content or "？" in content
+                or any(kw in content for kw in [
+                    "怎么", "如何", "为什么", "什么是", "能不能"
+                ])
+            ),
+            "is_short": len(content) <= 5,
+            "keywords": content[:200],
+            "is_first_turn": False,  # 由调用方设置
+        }
+
+    def _extract_query(self, messages: List[Dict[str, Any]]) -> str:
+        """从对话历史提取 KnowledgeBridge 检索查询。
+
+        取最后一条用户消息，截取前 200 字符。
+        """
+        last = self._find_last_user_msg(messages)
+        if not last:
+            return ""
+        content = last.get("content", "")
+        return content[:200] if content else ""
+
+    def _build_emotion_trigger(
+        self, emo_label: str, emo_trend: str
+    ) -> Optional[str]:
+        """构建情绪触发指令。
+
+        触发条件：情绪标签变化 或 趋势连续下降 3 轮+。
+        不触发时返回 None。
+        """
+        previous = self._previous_emotion_label
+        label_changed = previous is not None and emo_label != previous
+
+        # 更新趋势计数
+        if emo_trend == "下降":
+            self._emotion_trend_count += 1
+        else:
+            self._emotion_trend_count = 0
+
+        trend_down_3 = emo_trend == "下降" and self._emotion_trend_count >= 3
+
+        # 更新上一轮标签
+        self._previous_emotion_label = emo_label
+
+        if not (label_changed or trend_down_3):
+            return None
+
+        if label_changed:
+            direction = "下降" if emo_label == "负面" else "回暖"
+            return (
+                f"😶 白总情绪在{direction}。\n"
+                f"   先别急着推进话题，注意他的状态。"
+            )
+
+        if trend_down_3:
+            return (
+                f"😶 白总情绪连续 {self._emotion_trend_count} 轮在下降。\n"
+                f"   这次必须问他「今天状态不太对？」，等他回应再决定聊什么。"
+            )
+
+        return None
+
+    def _build_narrative_trigger(
+        self,
+        last_session_summary: str,
+        unresolved_topics: List[str],
+        is_first_turn: bool,
+    ) -> Optional[str]:
+        """构建叙事记忆触发指令。
+
+        触发条件：is_first_turn=True 且有叙事数据。
+        不触发时返回 None。
+        """
+        if not is_first_turn:
+            return None
+
+        if not last_session_summary and not unresolved_topics:
+            return None
+
+        parts: List[str] = []
+        if last_session_summary:
+            parts.append(f"📋 上次的事：{last_session_summary}")
+        if unresolved_topics:
+            parts.append(f"   上次没聊完：{' · '.join(unresolved_topics[:2])}")
+
+        if unresolved_topics:
+            parts.append(
+                f"   → 开场先提一句「上次聊到{'/'.join(unresolved_topics[:2])}，"
+                f"要继续吗？」，看他反应再决定。"
+            )
+        else:
+            parts.append(
+                "   → 开场自然提一下上次的事，看他有没有想继续的。"
+            )
+
+        return "\n".join(parts)
+
+    def _build_kb_triggers(self, query: str, limit: int = 3) -> List[str]:
+        """构建 KnowledgeBridge 触发指令。
+
+        trust ≥ 0.8 的事实已在 FactStoreProvider.search() 中追加行为指引。
+        无匹配时返回空列表。
+        """
+        if not self.knowledge_provider:
+            return []
+        try:
+            if not self.knowledge_provider.available():
+                return []
+        except Exception:
+            return []
+
+        try:
+            return self.knowledge_provider.search(query, limit=limit)
+        except Exception:
+            return []
+
+    @staticmethod
+    def _order_triggers(
+        emotion: Optional[str],
+        narrative: Optional[str],
+        kb: List[str],
+        msg_info: Dict[str, Any],
+    ) -> List[str]:
+        """按用户消息特征动态排序触发指令。
+
+        返回排序后的指令列表，最多 3 条。
+        """
+        triggers: List[str] = []
+
+        if msg_info.get("is_first_turn"):
+            if narrative:
+                triggers.append(narrative)
+            if emotion:
+                triggers.append(emotion)
+            triggers.extend(kb)
+        elif msg_info.get("is_short"):
+            if emotion:
+                triggers.append(emotion)
+            if narrative:
+                triggers.append(narrative)
+            triggers.extend(kb)
+        elif msg_info.get("is_question"):
+            triggers.extend(kb)
+            if emotion:
+                triggers.append(emotion)
+            if narrative:
+                triggers.append(narrative)
+        else:
+            if narrative:
+                triggers.append(narrative)
+            if emotion:
+                triggers.append(emotion)
+            triggers.extend(kb)
+
+        return triggers[:3]
 
     # ── 刀1: 情绪自主反思 ──
 
@@ -642,6 +864,9 @@ class CogitoEngine:
         heartbeat_line: Optional[str] = None,
         heartbeat_mode: str = "",
         heartbeat_expression: str = "",
+        triggers: Optional[List[str]] = None,  # deprecated: 改用 cross_session_patterns
+        cross_session_patterns: Optional[List[str]] = None,
+        emo_trend: str = "",
     ) -> str:
         """组装完整的 <consciousness> XML 块（三层结构）。
 
@@ -726,11 +951,11 @@ class CogitoEngine:
             emotion_label=emo_label,
             emotion_polarity=emo_polarity,
             emotion_confidence=emo_confidence,
-            emotion_trend=self._compute_emotion_trend(),
+            emotion_trend=emo_trend if emo_trend else self._compute_emotion_trend(),
             focus_frames=state.focus_stack.stack,
             last_session_summary=last_summary,
             unresolved_topics=unresolved,
-            cross_session_patterns=[],   # P2: 跨会话模式补齐
+            cross_session_patterns=cross_session_patterns if cross_session_patterns is not None else [],  # KB 触发指令
             last_reflection_topics=reflection_topics,  # 断链修复
             focus_history_summary=focus_history_summary,  # 断链修复
             self_reflection=self._latest_reflection,     # 刀1

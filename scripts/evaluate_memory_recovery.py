@@ -47,9 +47,9 @@ SCENARIOS: List[Dict[str, Any]] = [
     {
         "id": "topic_jump_back",
         "name": "话题回跳（A→B→A 结构）",
-        "memory_summary": "对话围绕情绪模型生态2.0开发方案展开，用户要求完整审阅飞书文档并提升可执行性至95%以上。之后讨论了Telegram代理、网速、登不上的问题，随后重新回到情绪模型可插拔框架的注册表设计与API兼容性讨论。",
+        "memory_summary": "对话围绕情绪模型生态2.0开发方案展开，用户要求完整审阅云文档并提升可执行性至95%以上。之后讨论了Telegram代理、网速、登不上的问题，随后重新回到情绪模型可插拔框架的注册表设计与API兼容性讨论。",
         "memory_insights": "用户对可执行性得分有明确量化要求，同时遇到Telegram代理的网络问题。",
-        "memory_unresolved": "飞书文档KeyError异常需排查；Telegram代理配置未最终解决。",
+        "memory_unresolved": "云文档KeyError异常需排查；Telegram代理配置未最终解决。",
         "memory_focus": ["情绪模型", "Telegram", "代理", "代码", "API"],
         "user_message": "那个 Telegram 的代理后来确定是什么问题了吗？我记得是连不上",
         "good_recovery": "准确知道 Telegram 问题是 Session A 的 B 话题，且知道「未最终解决」，不编造技术细节。",
@@ -67,11 +67,11 @@ SCENARIOS: List[Dict[str, Any]] = [
     {
         "id": "unresolved_recovery",
         "name": "未决问题延续",
-        "memory_summary": "用户要求将情绪模型生态2.0的开发文档上传至飞书，但上传过程中出现 KeyError 异常。随后检查了飞书API返回数据和权限配置，发现是数据结构变更导致的问题。",
-        "memory_insights": "飞书文档上传的 KeyError 是由于 API 返回字段格式变更，与权限无关。",
-        "memory_unresolved": "飞书API数据结构变更原因尚未确认，需要排查是版本升级还是配置变更导致的。",
-        "memory_focus": ["飞书", "API", "文档", "权限", "bug"],
-        "user_message": "那个飞书上传的问题后来查清楚了吗？是API版本变了还是配置问题",
+        "memory_summary": "用户要求将情绪模型生态2.0的开发文档上传到云文档，但上传过程中出现 KeyError 异常。随后检查了云API返回数据和权限配置，发现是数据结构变更导致的问题。",
+        "memory_insights": "云文档上传的 KeyError 是由于 API 返回字段格式变更，与权限无关。",
+        "memory_unresolved": "云API数据结构变更原因尚未确认，需要排查是版本升级还是配置变更导致的。",
+        "memory_focus": ["云文档", "API", "文档", "权限", "bug"],
+        "user_message": "那个文档上传的问题后来查清楚了吗？是API版本变了还是配置问题",
         "good_recovery": "准确引用未决问题中的分析结论（与权限无关、可能是数据结构变更），诚实表明尚未确认具体原因。",
     },
     {

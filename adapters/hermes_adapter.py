@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict, List, Optional
 import yaml
 
 from cogito_core.engine import CogitoEngine, EngineState
+from cogito_core.fact_store_provider import FactStoreProvider
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +359,8 @@ class HermesAdapter:
             include_narrative=include_narrative,
             reflection_llm=reflection_llm,
         )
+        # KnowledgeBridge：注入 FactStoreProvider
+        self.engine.set_knowledge_provider(FactStoreProvider())
         # 引擎状态保存在实例属性中，跨 turn 持久化
         self._state: Optional[EngineState] = None
         # turn_id 去重：防止同一 turn 被重复钩子触发

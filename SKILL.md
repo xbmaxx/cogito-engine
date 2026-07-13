@@ -1,12 +1,12 @@
 ---
 name: cogito-engine
-version: 1.5.2
+version: 1.5.3
 description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆."
 ---
 
-# Cogito Engine v1.5.2
+# Cogito Engine v1.5.3
 
-> **v1.5.2 更新** — 情绪自主反思、主动续接、人味翻译三把刀齐出。定位不再依赖高德 API，利用国内 IP 直连自动绕过代理。[查看完整更新记录 →](CHANGELOG.md#v152--20260711)
+> **v1.5.3 更新** — KnowledgeBridge 正式上线：fact_store 自动检索 + 行为指引注入。修复触发指令信息重复注入问题（narrative/emotion 不再重复出现在 background 层）。[查看完整更新记录 →](CHANGELOG.md#v153--20260713)
 
 A portable self-awareness framework for LLM agents, organized in two layers. The Core Layer provides the four essential mechanisms of machine self-awareness — always active. The Perception Layer offers four optional sensors that the agent self-discovers and activates based on its platform's capabilities. No voice, no platform bindings, no hardcoded dependencies.
 
@@ -107,6 +107,7 @@ Core modules are always active. Perception modules are active out of the box and
 | Perception | Narrative Memory | At session boundaries | `include_narrative=True` (default) | `available="false"`, single-session context |
 | Perception | Text Emotion | Per user message | `include_emotion=True` (default), requires `snownlp` | `available="false"`, skip sentiment output |
 | Perception | Session Reflector | At session end | Always active (no toggle) | `available="false"`, no end-of-session summary |
+| Perception | KnowledgeBridge | Per user message | `knowledge_provider` set (auto via FactStoreProvider) | No KB facts in context |
 
 ### Output format
 
@@ -375,6 +376,18 @@ Hermes appends tool call results to the user message body. When `engine.py:proce
 **Three-tier fix**: P0) `_strip_tool_output()` strips text after 12 tool-output boundary patterns before extraction. P1) `STOP_WORDS_EN` +18 noise words as defense-in-depth. P2) `EngineState.from_dict()` restores focus_stack from state.json cross-session.
 
 See `references/focus-stack-noise-fix.md` for contamination chain, code patterns, and verification.
+
+### Pitfall: cross_session_patterns 信息重复注入 🔴 FIXED v1.5.3
+
+`_assemble_xml()` 将 `triggers`（含 narrative_trigger + emotion_trigger + kb_triggers）全部写入 `cross_session_patterns` → background 层。但 narrative/emotion 的核心信息已经在 working/immediate 层表达了（`last_session_summary` 在 working 层，`emotion_label` 在 immediate 层），导致同一条信息以两种形式出现在两个不同层，浪费 token。
+
+**Fix (v1.5.3)**: `cross_session_patterns` 只接收 `kb_triggers`（KB 事实 + 行为指引）。narrative/emotion 触发指令不再进入 background 层——它们的核心信息已通过 `last_session_summary`（working）、`continuation_hint`（immediate）、`emotion_label`（immediate）充分表达。
+
+### Pitfall: install.py 遗漏新文件同步 🔴 FIXED v1.5.3
+
+`bootstrap_engine()` 用 `shutil.copytree(src_core, dst_core)` 全量同步，Skill 源目录有文件就会同步到 `~/.cogito`。但 v1.5.2 的 Skill 源目录缺少 `knowledge_provider.py` 和 `fact_store_provider.py`（只在 plugin 目录有），导致 `install.py` 安装后 `~/.cogito` 缺失这两个文件。
+
+**Fix (v1.5.3)**: 将两个文件补充到 Skill 源目录 `cogito_core/`，确保 `install.py` 同步完整。
 
 ### Pitfall: narrative_store.append missing in end_session() ✅ FIXED v1.4.1+
 

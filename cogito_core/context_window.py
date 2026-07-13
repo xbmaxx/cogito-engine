@@ -229,9 +229,9 @@ class HierarchicalContextBuilder:
         if env_parts:
             lines.append(" · ".join(env_parts))
 
-        # 跨会话模式（截断最多 2 条）
+        # 跨会话模式 / 触发指令（截断最多 3 条）
         if inp.cross_session_patterns:
-            lines.extend(inp.cross_session_patterns[:2])
+            lines.extend(inp.cross_session_patterns[:3])
 
         result = "\n".join(lines) if lines else ""
         # 折叠规则：内容为空时才省略（位置信息即使短也有意义）
