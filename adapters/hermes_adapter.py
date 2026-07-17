@@ -418,6 +418,11 @@ class HermesAdapter:
                 if saved:
                     state = EngineState.from_dict(saved, session_id=session_id)
                     logger.debug("pre_llm_call: 从 state.json 恢复焦点栈 (depth=%d)", state.focus_stack.depth)
+                    # v1.5.10 恢复路径 bug：恢复 last_message_count 会让新会话
+                    # 触发 process() L259 dedup 短路，永远返回空 XML。
+                    # 新会话一律视为 fresh，焦点栈已通过 from_dict 跨 session 累积。
+                    state.last_message_count = 0
+                    state.is_first_message = True
                 else:
                     state = EngineState(session_id=session_id)
 

@@ -1,10 +1,10 @@
 ---
 name: cogito-engine
-version: 1.5.3
+version: 1.5.4
 description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆."
 ---
 
-# Cogito Engine v1.5.3
+# Cogito Engine v1.5.4
 
 > **v1.5.3 更新** — KnowledgeBridge 正式上线：fact_store 自动检索 + 行为指引注入。修复触发指令信息重复注入问题（narrative/emotion 不再重复出现在 background 层）。[查看完整更新记录 →](CHANGELOG.md#v153--20260713)
 
@@ -121,16 +121,47 @@ The XML schema is defined in the references. All fields are present even when a 
 
 **Hermes visibility note**: On Hermes, the XML is injected into the LLM API message content (appended to the user message before the API call), NOT persisted in the session database and NOT visible in the chat UI. The agent receives it as context but the user does not see it. This is by design — `pre_llm_call` return values are ephemeral (never persisted to session DB).
 
-**Hermes Studio/Web UI limitation**: `<consciousness>` XML auto-injection works in CLI (`hermes chat`) and Gateway (飞书/微信) sessions, but **NOT in Studio desktop app or Web UI out of the box**. This is because the Bridge Worker that powers Studio sessions never calls `discover_and_load()` — the plugin's `register()` is never invoked, so `pre_llm_call` and all other lifecycle hooks silently return empty. Tools (`consciousness_get_status` etc.) remain available via MCP. This is a Hermes upstream architecture gap (Bridge Worker creates `AIAgent` without loading plugins).
+**Hermes Studio/Web UI limitation**: `<consciousness>` XML auto-injection works in CLI (`hermes chat`) and Gateway (飞书/微信) sessions, but **NOT in Studio desktop app or Web UI out of the box** because of two independent failures, both required for the fix to work.
 
-**Workaround** — add 2 lines to `bridge_pool.py` (in the Hermes Web UI installation) after `_refresh_worker_profile_env()` and before `AIAgent()` creation:
+**Failure chain**:
+
+1. **Bridge Worker never loads plugins** — Studio's Bridge Worker creates `AIAgent()` without calling `discover_and_load()`, so `register()` (whether class method or module-level) is never invoked, hooks are empty, and `invoke_hook()` silently returns `[]`. Tools (`consciousness_get_status` etc.) remain available via MCP. This is a Hermes upstream architecture gap.
+
+2. **Plugin lacks `__init__.py`** (v1.5.3 and earlier) — Hermes requires directory plugins to have `__init__.py` with a `register(ctx)` function at module level. Without it, even CLI/Gateway `discover_plugins()` skips the plugin with `No __init__.py in …`. Cogito Engine shipped with `register()` as a class method on `HermesAdapter` (in `adapters/hermes_adapter.py`) — valid Python, but Hermes's plugin loader only calls module-level `register`, not class methods. The install pipeline never generated an `__init__.py`.
+
+**Workaround — three changes needed** (all three are required for the fix, missing any one = still broken):
+
+**Change 1 — `bridge_pool.py`** (Hermes Web UI installation): after `_ensure_agent_imports()` / `_suppress_bridge_platform_hint()` and before `from run_agent import AIAgent`:
 
 ```python
-from hermes_cli.plugins import discover_plugins
-discover_plugins()
+            _ensure_agent_imports()
+            _suppress_bridge_platform_hint()
+
+            # --- Cogito Engine: discover plugins so hooks fire for Studio sessions ---
+            try:
+                from hermes_cli.plugins import discover_plugins
+                discover_plugins()
+            except Exception:
+                pass
+            # --- end Cogito Engine patch ---
+
+            from run_agent import AIAgent
 ```
 
-→ Restart Studio client for the change to take effect. Verify with `grep "HermesAdapter 已注册" ~/.hermes/logs/agent.log`. This patch is idempotent (`discover_plugins()` is a no-op after first call) and does not affect CLI/Gateway sessions. **Note**: this file is overwritten on Hermes Studio upgrades — re-apply after each upgrade until upstream fixes it.
+**Change 2 — `__init__.py`** (ship with plugin, v1.5.4+): module-level entry point that instantiates `HermesAdapter` once and delegates `register(ctx)`. See repo root `__init__.py` for the canonical implementation.
+
+**Change 3 — `hermes_adapter.py`** (adapters/, v1.5.4+): after `EngineState.from_dict(saved, …)` add:
+
+```python
+                    state.last_message_count = 0
+                    state.is_first_message = True
+```
+
+Without Change 3, `state.json`'s stale `last_message_count` from a prior session triggers `process()` L259 dedup guard — the engine returns `<consciousness>\n</consciousness>` for every new session's first message, and `_pre_llm_call` L428 silently drops it as "empty XML."
+
+**Verification**: after all 3 changes + restart, confirm `HermesAdapter 已注册` in `agent.log`, then send a message and check `emotion_history.jsonl` has a new entry within the last minute. Also verify `pre_llm_call: session=… turn=… history=N条` log entries (they appear on every injected message).
+
+**Note**: bridge_pool.py is overwritten on Hermes Studio upgrades — re-apply Change 1 after each upgrade.
 
 ### TICK interval configuration
 
@@ -480,6 +511,35 @@ See `references/session-reflector-keyframe-gap.md`.
 ### Pitfall: Hermes Studio on_session_end fires for every delegate_task completion 🔴
 
 The plugin assumes `on_session_end` fires **once** when the user closes a conversation. In Hermes Studio, it fires for **every delegate_task sub-agent completion** — and `session_id` is the **parent** session, not the sub-agent's. Result: one long session with N delegate_task calls = 2N narrative entries (N real + N garbage with sub-agent keywords like `['user', 'one', 'skills', 'via', 'session']`). 76% of entries originate from this, vs 12% from context compression and 12% from real session end. `_run_deferred_reflection()` only handles 1 pending entry per new session → 98% never enriched. See `references/delegate-task-narrative-backlog.md` for session data and analysis.
+
+### Pitfall: plugin lacks __init__.py + register() is class method 🔴 FIXED v1.5.4 (2026-07-17)
+
+Hermes requires directory plugins to have `__init__.py` with a `register(ctx)` function at **module level** (not as a class method). Cogito Engine shipped `register()` as a class method on `HermesAdapter` — valid Python, but Hermes's plugin loader (`plugins.py L1822: spec.loader.exec_module(module)`) only calls module-level `register`, never inspects class methods. Install pipeline never generated an `__init__.py`.
+
+**Symptoms**: `Failed to load plugin 'hermes_consciousness': No __init__.py in …` at every `discover_plugins()` call. Even with bridge_pool.py patched, the plugin never lands in the loaded list. CLI/Gateway users are equally affected (not Studio-specific).
+
+**Fix (v1.5.4)**: Ship `__init__.py` in repo root. It:
+- Inserts `~/.cogito` into `sys.path` (matching install.py bootstrap convention)
+- Imports `HermesAdapter` from `.hermes_adapter`
+- Holds a module-level singleton (`_adapter`) instantiated once
+- Exposes `def register(ctx)` that delegates to `_adapter.register(ctx)`
+
+After deploying, `install.py` copies `__init__.py` alongside `hermes_adapter.py` into the plugin directory → Hermes loader finds both.
+
+### Pitfall: last_message_count restored from state.json causes permanent XML silence 🔴 FIXED v1.5.4 (2026-07-17)
+
+`EngineState.from_dict()` (L138-150) restores `last_message_count` from `state.json` as-is. This value is the previous session's total message count (e.g. 248). `process()` L259 guards against re-injecting the same message: when `state.last_message_count > last_user_idx`, it returns `<consciousness>\n</consciousness>` (32 chars). `_pre_llm_call` L428 then drops this as "empty XML."
+
+**Effect**: every new session's first message hits this guard (248 > 0 → true → empty), and the adapter silently returns `None`. All subsequent messages in the same session chain-silently return None because state is deserialized at the same guard point for each turn. The whole pipeline runs (logs confirm tick=1, focus=updated, emotion written to disk), but XML never reaches the LLM.
+
+**Fix (v1.5.4)**: In `hermes_adapter._pre_llm_call()`, after `EngineState.from_dict(saved, …)`, reset:
+
+```python
+state.last_message_count = 0
+state.is_first_message = True
+```
+
+Focus stack cross-session preservation is unaffected — it comes from `from_dict` separately. Only the dedup counter is cleared because a new session is definitionally fresh.
 
 ## Delegation
 
