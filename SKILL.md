@@ -127,7 +127,7 @@ The XML schema is defined in the references. All fields are present even when a 
 
 1. **Bridge Worker never loads plugins** — Studio's Bridge Worker creates `AIAgent()` without calling `discover_and_load()`, so `register()` (whether class method or module-level) is never invoked, hooks are empty, and `invoke_hook()` silently returns `[]`. Tools (`consciousness_get_status` etc.) remain available via MCP. This is a Hermes upstream architecture gap.
 
-2. **Plugin lacks `__init__.py`** (v1.5.3 and earlier) — Hermes requires directory plugins to have `__init__.py` with a `register(ctx)` function at module level. Without it, even CLI/Gateway `discover_plugins()` skips the plugin with `No __init__.py in …`. Cogito Engine shipped with `register()` as a class method on `HermesAdapter` (in `adapters/hermes_adapter.py`) — valid Python, but Hermes's plugin loader only calls module-level `register`, not class methods. The install pipeline never generated an `__init__.py`.
+2. **`__init__.py` lost after install** — the repo ships `adapters/__init__.py` with the correct module-level `register(ctx)`, but manual `rm -rf` / partial installs / `dirs_exist_ok=True` edge cases can drop it from `~/.hermes/plugins/hermes_consciousness/`. Without it, loader reports `No __init__.py in …` and the plugin never lands. Recovery: rerun `install.py --platform hermes`.
 
 **Workaround — three changes needed** (all three are required for the fix, missing any one = still broken):
 
@@ -148,7 +148,7 @@ The XML schema is defined in the references. All fields are present even when a 
             from run_agent import AIAgent
 ```
 
-**Change 2 — `__init__.py`** (ship with plugin, v1.5.4+): module-level entry point that instantiates `HermesAdapter` once and delegates `register(ctx)`. See repo root `__init__.py` for the canonical implementation.
+**Change 2 — ensure deployed `__init__.py` exists** (recover, not new file): the repo's `adapters/__init__.py` already has the correct module-level `register(ctx)` and persistence-home redirect. `install.py` copies the whole `adapters/` into the plugin dir. If `ls ~/.hermes/plugins/hermes_consciousness/__init__.py` returns missing, rerun `python3 install.py --platform hermes` (or fully `rm -rf` the plugin dir first). Do not write a custom `__init__.py` — the canonical one must wire persistence to `~/.hermes/memory/` or data leaks across profiles.
 
 **Change 3 — `hermes_adapter.py`** (adapters/, v1.5.4+): after `EngineState.from_dict(saved, …)` add:
 
@@ -512,19 +512,15 @@ See `references/session-reflector-keyframe-gap.md`.
 
 The plugin assumes `on_session_end` fires **once** when the user closes a conversation. In Hermes Studio, it fires for **every delegate_task sub-agent completion** — and `session_id` is the **parent** session, not the sub-agent's. Result: one long session with N delegate_task calls = 2N narrative entries (N real + N garbage with sub-agent keywords like `['user', 'one', 'skills', 'via', 'session']`). 76% of entries originate from this, vs 12% from context compression and 12% from real session end. `_run_deferred_reflection()` only handles 1 pending entry per new session → 98% never enriched. See `references/delegate-task-narrative-backlog.md` for session data and analysis.
 
-### Pitfall: plugin lacks __init__.py + register() is class method 🔴 FIXED v1.5.4 (2026-07-17)
+### Pitfall: plugin lacks __init__.py after install — adapters/__init__.py exists in repo but deploy loses it 🔴 v1.5.4 (2026-07-17)
 
-Hermes requires directory plugins to have `__init__.py` with a `register(ctx)` function at **module level** (not as a class method). Cogito Engine shipped `register()` as a class method on `HermesAdapter` — valid Python, but Hermes's plugin loader (`plugins.py L1822: spec.loader.exec_module(module)`) only calls module-level `register`, never inspects class methods. Install pipeline never generated an `__init__.py`.
+The repo ships `adapters/__init__.py` with the proper module-level `register(ctx)` (instantiates `HermesAdapter` once, delegates `register`). `install.py` copies the entire `adapters/` directory to `~/.hermes/plugins/hermes_consciousness/` via `shutil.copytree(REPO_ROOT / "adapters", plugin_dir, dirs_exist_ok=True)`. That should put `__init__.py` directly into the plugin dir.
 
-**Symptoms**: `Failed to load plugin 'hermes_consciousness': No __init__.py in …` at every `discover_plugins()` call. Even with bridge_pool.py patched, the plugin never lands in the loaded list. CLI/Gateway users are equally affected (not Studio-specific).
+**But deployments get lost** (`dirs_exist_ok=True` + manual `rm -rf` cycles + partial copies can drop top-level files). Symptoms: `Failed to load plugin 'hermes_consciousness': No __init__.py in …` at every `discover_plugins()`, even with bridge_pool.py patched. CLI/Gateway equally affected.
 
-**Fix (v1.5.4)**: Ship `__init__.py` in repo root. It:
-- Inserts `~/.cogito` into `sys.path` (matching install.py bootstrap convention)
-- Imports `HermesAdapter` from `.hermes_adapter`
-- Holds a module-level singleton (`_adapter`) instantiated once
-- Exposes `def register(ctx)` that delegates to `_adapter.register(ctx)`
+**Verify deploy state**: `ls ~/.hermes/plugins/hermes_consciousness/__init__.py` — if missing, the install pipeline dropped it.
 
-After deploying, `install.py` copies `__init__.py` alongside `hermes_adapter.py` into the plugin directory → Hermes loader finds both.
+**Recovery (v1.5.4 guidance)**: re-run `python3 install.py --platform hermes` to re-copy the full `adapters/` tree. If a partial state persists, `rm -rf ~/.hermes/plugins/hermes_consciousness/` then reinstall. The cover __init__.py from `adapters/` is the canonical one — do not write a custom one that lacks the persistence-home redirect (lines 18–26) or narrative_store wiring; data would silently leak to `~/.cogito/` across profiles.
 
 ### Pitfall: last_message_count restored from state.json causes permanent XML silence 🔴 FIXED v1.5.4 (2026-07-17)
 
