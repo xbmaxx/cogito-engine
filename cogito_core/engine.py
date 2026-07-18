@@ -776,7 +776,7 @@ class CogitoEngine:
     def _build_kb_triggers(self, query: str, limit: int = 3) -> List[str]:
         """构建 KnowledgeBridge 触发指令。
 
-        trust ≥ 0.8 的事实已在 FactStoreProvider.search() 中追加行为指引。
+        trust ≥ 0.8 的事实已在 KnowledgeBaseProvider.search() 中追加行为指引。
         无匹配时返回空列表。
         """
         if not self.knowledge_provider:

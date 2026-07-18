@@ -1,5 +1,5 @@
 """
-fact_store_provider.py — 从 Hermes fact_store 检索知识（v3 本地嵌入版）。
+knowledge_base.py — 通用 SQLite 知识库检索（本地嵌入版）。
 
 Local embedding via fastembed + BAAI/bge-small-zh-v1.5 (dim=512).
 完全不依赖外部 API，零配置，全本地推理。
@@ -41,7 +41,7 @@ _ACTION_RULES = [
 
 # ── 从知识库自动生成的关键词规则（启动时扫描）──
 # 格式：[("关键词", "行为描述"), ...]
-# 由 _build_dynamic_rules() 在 FactStoreProvider 初始化时填充
+# 由 _build_dynamic_rules() 在 KnowledgeBaseProvider 初始化时填充
 _DYNAMIC_RULES: List[tuple] = []
 
 
@@ -107,15 +107,15 @@ def _get_embed_model():
     return _EMBED_MODEL if _EMBED_MODEL is not False else None
 
 
-# ── FactStoreProvider ──
+# ── KnowledgeBaseProvider ──
 
 
-class FactStoreProvider(KnowledgeProvider):
+class KnowledgeBaseProvider(KnowledgeProvider):
     """从 Hermes fact_store 检索知识。支持 LIKE + 本地嵌入两路并行检索。"""
 
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or os.path.expanduser(
-            "~/.hermes/memory_store.db"
+            "~/.cogito/knowledge_base.db"
         )
         # LRU 缓存：query → (embedding, timestamp)
         self._emb_cache: Dict[str, tuple] = {}

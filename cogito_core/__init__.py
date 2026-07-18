@@ -53,7 +53,7 @@ from .env_sensor import get_snapshot as get_env_snapshot
 
 # ── KnowledgeBridge ──
 from .knowledge_provider import KnowledgeProvider
-from .fact_store_provider import FactStoreProvider
+from .knowledge_base import KnowledgeBaseProvider
 
 __all__ = [
     # 引擎
@@ -79,7 +79,7 @@ __all__ = [
     "get_env_snapshot",
     # KnowledgeBridge
     "KnowledgeProvider",
-    "FactStoreProvider",
+    "KnowledgeBaseProvider",
     # 记忆
     "KeyframeExtractor",
     "estimate_conversation_rounds",
