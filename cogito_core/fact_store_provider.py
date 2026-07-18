@@ -31,59 +31,18 @@ logger = logging.getLogger(__name__)
 # ── 行为指引规则表 ──
 
 _ACTION_RULES = [
-    # ── 表达与沟通（10 条）──
-    ("短句", "回复控制在 3 行以内，别写长篇大论"),
-    ("Markdown", "用表格和短句，别写大段文字"),
-    ("观点", "观点要清晰直接，不要模棱两可"),
-    ("长篇", "长内容先给摘要再展开"),
-    ("代码", "代码块标注语言，关键行加注释"),
-    ("表格", "对比信息和多选项优先用表格"),
-    ("举例", "抽象概念先给具体例子再解释"),
-    ("对比", "多方面对比用表格展示，不要一段话混着说"),
-    ("教学", "分步骤讲解，每步给代码或示例"),
-    ("态度", "语气温和有耐心，不要急躁"),
-    # ── 项目与开发（8 条）──
-    ("架构", "讨论架构时先画清边界再谈实现"),
-    ("重构", "重构前说明旧方案的问题和新方案的优势"),
-    ("测试", "改动后确认测试通过，说明测试范围"),
-    ("版本", "讨论版本差异时列 changelog 关键项"),
-    ("部署", "部署方案包含回退步骤"),
-    ("性能", "性能优化前先说明瓶颈在哪"),
-    ("兼容", "改进要考虑向后兼容"),
-    ("配置", "配置项给出默认值和可选范围"),
-    # ── 排查与修复（8 条）──
-    ("错误", "定位错误先看上下文环境"),
-    ("调试", "调试前明确预期行为和实际行为差异"),
-    ("日志", "排查问题时先检查相关日志"),
-    ("排查", "按可能性排序，逐一排除"),
-    ("修复", "修复后验证边界情况"),
-    ("超时", "网络超时先检查代理和防火墙"),
-    ("异常", "异常处理要区分预期内和预期外"),
-    ("跨版本", "跨版本问题先确认 API 变化"),
-    # ── 设计决策（7 条）──
-    ("设计", "设计方案给出至少两种路线对比"),
-    ("方案", "方案讨论列出各自的 trade-off"),
-    ("调研", "调研结果按维度打分，不要笼统说好"),
-    ("决策", "给选项而不是给建议"),
-    ("风险", "重大决策前置风险说明"),
-    ("依赖", "引入新依赖说明替代方案"),
-    ("数据", "讨论问题时引用数据而非直觉"),
-    # ── 用户交互（7 条）──
-    ("反馈", "反馈意见指出具体问题点"),
-    ("确认", "重要操作前确认用户意图"),
-    ("引导", "引导用户自行发现结论"),
-    ("调整", "用户提出调整时先理解意图再执行"),
-    ("偏好", "注意他之前表达过的偏好"),
-    ("节奏", "按用户节奏来，不抢话不替他做决定"),
-    ("情绪", "留意他的情绪变化"),
-    # ── 项目特定（6 条）──
-    ("产品", "从用户角度思考，不要只从技术角度"),
-    ("推理", "给出推理过程，不要直接给结论"),
-    ("数学模型", "讨论方案时给数据，别给直觉"),
-    ("不打扰", "别频繁追问，等他自己说"),
-    ("意识体", "讨论意识体时引用当前设计文档"),
-    ("KnowledgeBridge", "检索结果标来源，不可靠的标置信度"),
+    # ── 按事实类别匹配（category 字段，适用于任何知识库）──
+    # 这些是通用规则，不依赖具体关键词
+    (None, "user_pref", "注意他之前表达过的偏好和习惯"),
+    (None, "insight", "引用经验总结时说明来源和可信度"),
+    (None, "project", "引用项目决策时给出上下文和版本"),
+    (None, "tool", "引用工具经验时说明平台和版本差异"),
 ]
+
+# ── 从知识库自动生成的关键词规则（启动时扫描）──
+# 格式：[("关键词", "行为描述"), ...]
+# 由 _build_dynamic_rules() 在 FactStoreProvider 初始化时填充
+_DYNAMIC_RULES: List[tuple] = []
 
 
 # ── 嵌入相似度门槛（环境变量可覆盖）──
@@ -164,6 +123,8 @@ class FactStoreProvider(KnowledgeProvider):
         self._emb_column_ready = False
         # 后台 embedding 生成
         self._embed_bg_done = False
+        # 从知识库自动生成关键词规则
+        self._build_dynamic_rules()
         # 预热：触发模型加载（非阻塞）
         if _get_embed_model() is not None:
             self._start_background_embed()
@@ -278,11 +239,12 @@ class FactStoreProvider(KnowledgeProvider):
     def _format_result(self, row: Dict[str, Any], prefix: str = "") -> str:
         text = row["content"]
         trust = row.get("trust_score", 0.0)
+        category = row.get("category", "")
         if len(text) > 120:
             cut = text[:120].rfind("。")
             text = text[:cut + 1] if cut > 80 else text[:117] + "..."
         if trust >= 0.8:
-            action = self._derive_action(text)
+            action = self._derive_action(text, category)
             return f"{prefix}· {text} → {action}" if action else f"{prefix}· {text}"
         return f"{prefix}· {text}"
 
@@ -431,9 +393,66 @@ class FactStoreProvider(KnowledgeProvider):
             if len(unique) >= 20: break
         return unique
 
+    def _build_dynamic_rules(self) -> None:
+        """从用户知识库扫描高频关键词，自动生成行为指引规则。
+
+        取信任 ≥ 0.7 的事实，提取 2-4 字中文片段，
+        仅保留纯中文词（过滤英文/数字/混合噪声），
+        出现 ≥ 3 次的关键词生成规则。
+        """
+        global _DYNAMIC_RULES
+        if not os.path.exists(self.db_path):
+            _DYNAMIC_RULES = []
+            return
+
+        import re
+        _STOP = frozenset({
+            "一个", "可以", "这个", "那个", "什么", "怎么", "如何",
+            "没有", "不是", "因为", "所以", "但是", "如果", "虽然",
+            "已经", "通过", "进行", "使用", "需要", "用于", "还有",
+            "之后", "之前", "其中", "相关", "以及", "或者", "不过",
+            "对于", "就是", "只是", "还是", "因为", "所以", "这样",
+            "可能", "应该", "可以", "必须", "需要", "不会", "不会",
+        })
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            rows = conn.execute("""
+                SELECT content FROM facts
+                WHERE trust_score >= 0.7
+                  AND length(content) BETWEEN 15 AND 120
+                  AND (category IS NULL OR category != 'roleplay')
+            """).fetchall()
+            conn.close()
+        except Exception:
+            _DYNAMIC_RULES = []
+            return
+
+        from collections import Counter
+        counter: Counter = Counter()
+        for (content,) in rows:
+            text = content[:120]
+            # 提取 2-6 字中文片段
+            for match in re.finditer(r'[\u4e00-\u9fff]{2,6}', text):
+                seg = match.group()
+                if seg not in _STOP:
+                    counter[seg] += 1
+
+        rules = []
+        for kw, cnt in counter.most_common(50):
+            if cnt >= 2:  # 出现 2 次即生成规则
+                rules.append((kw, f"讨论到「{kw}」时参考此条"))
+        _DYNAMIC_RULES = rules[:30]  # 最多 30 条
+
     @staticmethod
-    def _derive_action(text: str) -> Optional[str]:
-        for keyword, action in _ACTION_RULES:
-            if keyword in text:
+    def _derive_action(text: str, category: str = "") -> Optional[str]:
+        # 先按 category 匹配（优先级高）
+        if category:
+            for kw, cat, action in _ACTION_RULES:
+                if kw is None and cat == category:
+                    return action
+        # 再按动态关键词匹配（从知识库自动生成）
+        for kw, action in _DYNAMIC_RULES:
+            if kw in text:
                 return action
         return None
