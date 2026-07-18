@@ -183,7 +183,7 @@ class KnowledgeBaseProvider(KnowledgeProvider):
     # ── 接口 ──
 
     def name(self) -> str:
-        return "fact_store"
+        return "knowledge_base"
 
     def available(self) -> bool:
         if not os.path.exists(self.db_path):
