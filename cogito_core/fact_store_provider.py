@@ -32,15 +32,25 @@ logger = logging.getLogger(__name__)
 # ── embedding 模型映射（provider → (model_name)）──
 # 这些 provider 的 base URL 与 chat 共用，只需换 model name
 _EMBEDDING_MODEL_MAP: Dict[str, str] = {
-    "deepseek": "deepseek-embedding",
     "openai": "text-embedding-3-small",
     "zai": "zai-embedding",
     "openrouter": "text-embedding-3-small",
 }
 
+# ── provider 已知 base_url（同 hermes_adapter.py）──
+_KNOWN_PROVIDER_URLS: Dict[str, str] = {
+    "deepseek": "https://api.deepseek.com/v1",
+    "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com",
+    "zai": "https://api.z.ai/api",
+    "groq": "https://api.groq.com/openai/v1",
+    "xai": "https://api.x.ai/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "mistral": "https://api.mistral.ai/v1",
+}
+
 # ── 通用 embedding fallback：环境变量 → (base_url, model) ──
 _EMBEDDING_FALLBACK: Dict[str, tuple] = {
-    "DEEPSEEK_API_KEY": ("https://api.deepseek.com/v1", "deepseek-embedding"),
     "OPENAI_API_KEY": ("https://api.openai.com/v1", "text-embedding-3-small"),
     "OPENROUTER_API_KEY": ("https://openrouter.ai/api/v1", "text-embedding-3-small"),
 }
@@ -163,12 +173,16 @@ class FactStoreProvider(KnowledgeProvider):
         if provider:
             api_key, base_url = _find_creds(config, provider)
             model = _EMBEDDING_MODEL_MAP.get(provider)
-            if api_key and base_url and model:
+            if api_key and model:
+                if not base_url:
+                    base_url = _KNOWN_PROVIDER_URLS.get(provider, "https://api.openai.com/v1")
                 return {"api_key": api_key, "base_url": base_url.rstrip("/"), "model": model}
 
         # 策略 3: 通用环境变量 fallback
         for env_var, (base_url, model) in _EMBEDDING_FALLBACK.items():
             key = os.environ.get(env_var, "").strip()
+            if not key:
+                key = _read_env_file(env_var)
             if key:
                 return {"api_key": key, "base_url": base_url.rstrip("/"), "model": model}
 
@@ -198,10 +212,11 @@ class FactStoreProvider(KnowledgeProvider):
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {self._emb_config['api_key']}",
+                    "HTTP-Referer": "https://github.com/xbmaxx/cogito-engine",
                 },
                 method="POST",
             )
-            with urllib_request.urlopen(req, timeout=15) as resp:
+            with urllib_request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             vector = data["data"][0]["embedding"]
             # 写缓存（最多 64 条）
@@ -246,13 +261,13 @@ class FactStoreProvider(KnowledgeProvider):
 
         conn = sqlite3.connect(self.db_path)
         try:
-            for r in need_embed[:50]:
+            for r in need_embed[:10]:  # 小批量，防止首次生成阻塞太久
                 vec = self._get_embedding(r["content"][:500])
                 if vec:
                     blob = _pack_vector(vec)
                     conn.execute(
-                        "UPDATE facts SET embedding = ? WHERE rowid = ?",
-                        (blob, r["rowid"]),
+                        "UPDATE facts SET embedding = ? WHERE fact_id = ?",
+                        (blob, r["fact_id"]),
                     )
             conn.commit()
             logger.debug("批量生成了 %d 条 embedding", min(len(need_embed), 50))
@@ -264,11 +279,11 @@ class FactStoreProvider(KnowledgeProvider):
         # 重新读取（含新 embedding）
         conn2 = sqlite3.connect(self.db_path)
         conn2.row_factory = sqlite3.Row
-        ids = tuple(r["rowid"] for r in rows)
+        ids = tuple(r["fact_id"] for r in rows)
         if len(ids) == 1:
             ids = (ids[0],)
         cur = conn2.execute(
-            f"SELECT rowid, content, trust_score, embedding FROM facts WHERE rowid IN ({','.join('?'*len(ids))})",
+            f"SELECT fact_id, content, trust_score, embedding FROM facts WHERE fact_id IN ({','.join('?'*len(ids))})",
             ids,
         )
         refreshed = [dict(r) for r in cur.fetchall()]
@@ -291,7 +306,7 @@ class FactStoreProvider(KnowledgeProvider):
             params = [f"%{kw}%" for kw in keywords] + [limit]
             rows = conn.execute(
                 f"""
-                SELECT rowid, content, trust_score, embedding
+                SELECT fact_id, content, trust_score, embedding
                 FROM facts
                 WHERE ({like_clauses})
                   AND trust_score >= 0.7
@@ -340,7 +355,7 @@ class FactStoreProvider(KnowledgeProvider):
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute("""
-                SELECT rowid, content, trust_score, embedding
+                SELECT fact_id, content, trust_score, embedding
                 FROM facts
                 WHERE trust_score >= 0.7
                   AND length(content) BETWEEN 15 AND 120
@@ -370,7 +385,7 @@ class FactStoreProvider(KnowledgeProvider):
             sim = _cosine_similarity(q_vec, f_vec)
             if sim > 0.3:  # 相似度门槛，过滤明显不相关
                 formatted = self._format_result(r, prefix="[语义]")
-                scored.append((sim, formatted, r["content"]))
+                scored.append((sim, formatted))
 
         scored.sort(key=lambda x: -x[0])
         return scored[:limit]
@@ -493,10 +508,7 @@ def _load_hermes_config() -> Dict[str, Any]:
 
 
 def _find_creds(config: Dict[str, Any], provider: str) -> tuple:
-    """从 Hermes config 查找 provider 的 API Key + base_url。
-
-    策略同 hermes_adapter.py 的 _find_api_key（简化版）。
-    """
+    """从 Hermes config 查找 provider 的 API Key + base_url。"""
     provider_lower = provider.lower()
 
     # custom_providers 数组
@@ -520,8 +532,39 @@ def _find_creds(config: Dict[str, Any], provider: str) -> tuple:
     if key:
         return key, ""
 
+    # ~/.hermes/.env 文件（Hermes 启动时加载，但子进程可能不继承）
+    env_path = os.path.join(Path.home(), ".hermes", ".env")
+    if os.path.exists(env_path):
+        try:
+            with open(env_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith(f"{provider.upper()}_API_KEY="):
+                        val = line.split("=", 1)[1].strip().strip("\"'")
+                        if val:
+                            return val, ""
+        except Exception:
+            pass
+
     key = os.environ.get("OPENAI_API_KEY", "")
     if key:
         return key, ""
 
     return "", ""
+
+
+def _read_env_file(var_name: str) -> str:
+    """从 ~/.hermes/.env 读取指定变量的值。"""
+    env_path = os.path.join(Path.home(), ".hermes", ".env")
+    if not os.path.exists(env_path):
+        return ""
+    try:
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(f"{var_name}="):
+                    val = line.split("=", 1)[1].strip().strip("\"'")
+                    return val
+    except Exception:
+        pass
+    return ""

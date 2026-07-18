@@ -32,6 +32,7 @@ XML 输出格式严格遵循 spec：
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -475,6 +476,22 @@ class CogitoEngine:
         # KB 事实仅在 background 层出现，不与其他层重复，可安全注入。
         kb_triggers_only = kb_triggers if kb_triggers else []
 
+        # ── P2 回馈：情绪趋势自然语言摘要 + 跨会话模式检测 ──
+        extra_patterns: List[str] = []
+        try:
+            trend_nl = self._build_emotion_trend_summary()
+            if trend_nl:
+                extra_patterns.append(trend_nl)
+        except Exception as exc:
+            logger.debug("情绪趋势摘要失败: %s", exc)
+
+        try:
+            extra_patterns.extend(self._build_cross_session_patterns())
+        except Exception as exc:
+            logger.debug("跨会话模式检测失败: %s", exc)
+
+        all_patterns = kb_triggers_only + extra_patterns
+
         # ── 9. 组装 XML ──
         xml = self._assemble_xml(
             state=state,
@@ -488,7 +505,7 @@ class CogitoEngine:
             heartbeat_line=heartbeat_line,
             heartbeat_mode=heartbeat_mode,
             heartbeat_expression=heartbeat_expression,
-            cross_session_patterns=kb_triggers_only,
+            cross_session_patterns=all_patterns,
             emo_trend=emo_trend,
         )
 
@@ -558,6 +575,87 @@ class CogitoEngine:
         if dec:
             return "下降"
         return "平稳"
+
+    # ── P2 回馈：情绪趋势自然语言摘要 ──
+
+    def _build_emotion_trend_summary(self) -> str:
+        """从最近 7 天情绪数据生成一句话趋势描述。
+
+        Returns:
+            "最近状态在回暖" / "最近情绪有些低落" / ""（数据不足）
+        """
+        emotions = persistence.load_emotion_since(days=7)
+        if len(emotions) < 3:
+            return ""
+
+        daily: Dict[str, List[float]] = {}
+        for e in emotions:
+            ts = e.get("ts", "")[:10]
+            s = e.get("sentiment", 0.5)
+            daily.setdefault(ts, []).append(s)
+
+        if len(daily) < 2:
+            return ""
+
+        days_sorted = sorted(daily.keys())
+        avgs = [sum(daily[d]) / len(daily[d]) for d in days_sorted]
+
+        if len(avgs) >= 3:
+            recent_avg = sum(avgs[-3:]) / 3
+            early_avg = sum(avgs[:3]) / 3
+        else:
+            recent_avg = avgs[-1]
+            early_avg = avgs[0]
+
+        diff = recent_avg - early_avg
+        if diff > 0.1:
+            return "最近状态在回暖"
+        elif diff < -0.1:
+            return "最近情绪有些低落"
+        return ""
+
+    # ── P2 回馈：跨会话模式检测 ──
+
+    def _build_cross_session_patterns(self) -> List[str]:
+        """从最近 30 天叙事数据检测跨会话模式。
+
+        检测两项：
+        1. 高频话题（出现 ≥3 次）
+        2. 反复出现的未解决问题（出现 ≥2 次）
+
+        Returns:
+            模式描述列表，如
+            ["你反复提到Cogito Engine——最近经常出现"]
+        """
+        narratives = persistence.load_narrative_since(days=30)
+        if len(narratives) < 5:
+            return []
+
+        # 话题共现聚类
+        topic_counts: Counter = Counter()
+        for n in narratives:
+            for t in n.get("focus_topics", []):
+                if t and len(str(t)) > 1:
+                    topic_counts[str(t)] += 1
+
+        patterns: List[str] = []
+        for topic, count in topic_counts.most_common(5):
+            if count >= 3:
+                patterns.append(f"你反复提到{topic}——最近经常出现")
+
+        # 反复出现的未解决问题
+        unresolved_counts: Counter = Counter()
+        for n in narratives:
+            u = n.get("unresolved", "").strip()
+            if u and u != "无":
+                key = u[:20]
+                unresolved_counts[key] += 1
+
+        for u, count in unresolved_counts.most_common(3):
+            if count >= 2:
+                patterns.append(f"{u}……这个问题出现了{count}次")
+
+        return patterns[:3]
 
     # ── 信息设计：触发指令系统 ──
 

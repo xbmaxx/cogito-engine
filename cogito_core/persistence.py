@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -28,10 +28,10 @@ _COGITO_HOME = Path(
     os.environ.get("COGITO_HOME", os.path.expanduser("~/.cogito"))
 )
 
-MAX_FOCUS_HISTORY = 50
-MAX_EMOTION_HISTORY = 500
-MAX_NARRATIVE = 50
-MAX_REFLECTIONS = 100
+MAX_FOCUS_HISTORY = 200
+MAX_EMOTION_HISTORY = 2000
+MAX_NARRATIVE = 200
+MAX_REFLECTIONS = 500
 
 
 def set_cogito_home(path: str) -> None:
@@ -275,3 +275,45 @@ def load_session_reflections(k: int = 3) -> List[Dict[str, Any]]:
     """加载最近 k 条会话反射。"""
     entries = _read_jsonl(REFLECTIONS_FILE)
     return entries[-k:] if entries else []
+
+
+# ── 时间范围查询（按天过滤）──
+
+
+def _filter_since(entries: List[Dict[str, Any]], days: int, ts_field: str = "ts") -> List[Dict[str, Any]]:
+    """过滤最近 N 天的条目。`days <= 0` 时返回全量。"""
+    if days <= 0:
+        return entries
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    results = []
+    for e in entries:
+        ts_str = e.get(ts_field) or e.get("timestamp", "")
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            if ts >= cutoff:
+                results.append(e)
+        except (ValueError, TypeError):
+            continue
+    return results
+
+
+def load_emotion_since(days: int = 7) -> List[Dict[str, Any]]:
+    """加载最近 N 天的情绪历史。"""
+    return _filter_since(_read_jsonl(EMOTION_HISTORY_FILE), days, ts_field="ts")
+
+
+def load_narrative_since(days: int = 7) -> List[Dict[str, Any]]:
+    """加载最近 N 天的叙事记忆。"""
+    return _filter_since(_read_jsonl(NARRATIVE_FILE), days, ts_field="timestamp")
+
+
+def load_focus_since(days: int = 7) -> List[Dict[str, Any]]:
+    """加载最近 N 天的焦点历史。"""
+    return _filter_since(_read_jsonl(FOCUS_HISTORY_FILE), days, ts_field="ts")
+
+
+def load_reflections_since(days: int = 30) -> List[Dict[str, Any]]:
+    """加载最近 N 天的会话反射。"""
+    return _filter_since(_read_jsonl(REFLECTIONS_FILE), days, ts_field="ts")
