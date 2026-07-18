@@ -44,6 +44,15 @@ _ACTION_RULES = [
 ]
 
 
+# ── 嵌入相似度门槛（环境变量可覆盖）──
+# COGITO_SIM_THRESHOLD=0.25 可调低以召回更多结果
+# 默认 0.3，范围 0.0-1.0
+try:
+    _EMBED_SIM_THRESHOLD = float(os.environ.get("COGITO_SIM_THRESHOLD", "0.3"))
+except (ValueError, TypeError):
+    _EMBED_SIM_THRESHOLD = 0.3
+
+
 # ── 向量工具 ──
 
 
@@ -301,7 +310,7 @@ class FactStoreProvider(KnowledgeProvider):
             except Exception:
                 continue
             sim = _cosine_similarity(q_vec, f_vec)
-            if sim > 0.3:
+            if sim > _EMBED_SIM_THRESHOLD:
                 formatted = self._format_result(r, prefix="[语义]")
                 scored.append((sim, formatted))
 
