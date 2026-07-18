@@ -20,6 +20,7 @@ import os
 import sqlite3
 import struct
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib import request as urllib_request
@@ -113,6 +114,64 @@ class FactStoreProvider(KnowledgeProvider):
         self._emb_cache: Dict[str, tuple] = {}
         # 标记 embedding 列是否已就绪
         self._emb_column_ready = False
+        # 后台 embedding 生成
+        self._embed_bg_done = False
+        if self._emb_config:
+            self._start_background_embed()
+
+    # ── 后台 embedding 批量生成（不阻塞对话）──
+
+    def _start_background_embed(self) -> None:
+        """在后台线程中为所有可命中事实生成 embedding。首次搜索不阻塞。"""
+        import threading as _t
+
+        def _run():
+            try:
+                self._ensure_embedding_column()
+                conn = sqlite3.connect(self.db_path)
+                rows = conn.execute("""
+                    SELECT fact_id, content FROM facts
+                    WHERE trust_score >= 0.7
+                      AND length(content) BETWEEN 15 AND 120
+                      AND (category IS NULL OR category != 'roleplay')
+                      AND embedding IS NULL
+                """).fetchall()
+                conn.close()
+                if not rows:
+                    self._embed_bg_done = True
+                    return
+                # 4 路并行，每批 4 条
+                pool = ThreadPoolExecutor(max_workers=4)
+                futures = []
+                fact_map = {}  # future → fact_id
+                for row in rows:
+                    text = row["content"][:500]
+                    fut = pool.submit(self._get_embedding, text)
+                    futures.append(fut)
+                    fact_map[id(fut)] = row["fact_id"]
+                conn2 = sqlite3.connect(self.db_path)
+                for i, future in enumerate(as_completed(futures)):
+                    vec = future.result()
+                    if vec:
+                        fid = fact_map[id(future)]
+                        blob = _pack_vector(vec)
+                        conn2.execute(
+                            "UPDATE facts SET embedding = ? WHERE fact_id = ?",
+                            (blob, fid),
+                        )
+                    # 每完成 10 条提交一次
+                    if i > 0 and i % 10 == 0:
+                        conn2.commit()
+                conn2.commit()
+                conn2.close()
+                pool.shutdown()
+                self._embed_bg_done = True
+                logger.info("后台 embedding 生成完成: %d 条", len(rows))
+            except Exception as exc:
+                logger.debug("后台 embedding 生成失败: %s", exc)
+                self._embed_bg_done = True
+
+        _t.Thread(target=_run, daemon=True).start()
 
     # ── 接口 ──
 
@@ -341,9 +400,10 @@ class FactStoreProvider(KnowledgeProvider):
     def _embedding_search(self, query: str, limit: int) -> List[tuple]:
         """语义检索：query embedding → 余弦相似度 → top N。
 
-        Returns:
-            [(score, formatted_text), ...]
+        后台 embedding 未就绪时返回空（不阻塞对话）。
         """
+        if not self._embed_bg_done:
+            return []
         self._ensure_embedding_column()
 
         q_vec = self._get_embedding(query)
@@ -368,9 +428,6 @@ class FactStoreProvider(KnowledgeProvider):
             return []
 
         rows_dicts = [dict(r) for r in rows]
-
-        # 批量为无 embedding 的事实生成向量
-        rows_dicts = self._batch_embed_facts(rows_dicts)
 
         # 余弦相似度排序
         scored: List[tuple] = []  # (score, formatted_text, content)
