@@ -137,28 +137,31 @@ def detect_platform() -> List[str]:
 # ── install per-platform ───────────────────────────────────────────────────
 
 def install_dependencies() -> bool:
-    """安装 Python 依赖（snownlp 用于情感分析）。
-    
+    """安装 Python 依赖（snownlp 用于情感分析，fastembed 用于本地语义检索）。
+
     Returns:
         True 表示成功或已安装，False 表示失败。
     """
-    try:
-        import snownlp  # noqa: F401
-        return True  # 已安装
-    except ImportError:
-        pass
-    
-    # 尝试 pip install
-    cmd = [PYTHON, "-m", "pip", "install", "snownlp", "-q"]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            return True
-        print(f"  ⚠ pip install snownlp 失败: {result.stderr.strip()[-120:]}")
-        return False
-    except Exception as exc:
-        print(f"  ⚠ pip install snownlp 异常: {exc}")
-        return False
+    deps = ["snownlp", "fastembed"]
+    all_ok = True
+    for dep in deps:
+        try:
+            __import__(dep)
+            continue  # 已安装
+        except ImportError:
+            pass
+        cmd = [PYTHON, "-m", "pip", "install", dep, "-q"]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"  ✓ pip install {dep}")
+            else:
+                print(f"  ⚠ pip install {dep} 失败: {result.stderr.strip()[-120:]}")
+                all_ok = False
+        except Exception as exc:
+            print(f"  ⚠ pip install {dep} 异常: {exc}")
+            all_ok = False
+    return all_ok
 
 
 def install_for_platform(platform: str, update: bool = False, hermes_profile: Optional[str] = None) -> bool:
