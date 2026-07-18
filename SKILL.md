@@ -1,10 +1,12 @@
 ---
 name: cogito-engine
-version: 1.5.4
+version: 1.5.5
 description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆."
 ---
 
-# Cogito Engine v1.5.4
+# Cogito Engine v1.5.5
+
+> **v1.5.5 更新** — KnowledgeBridge 全线升级：本地语义检索 + 自动行为指引 + 通用知识库命名。详见下文。
 
 > **v1.5.3 更新** — KnowledgeBridge 正式上线：fact_store 自动检索 + 行为指引注入。修复触发指令信息重复注入问题（narrative/emotion 不再重复出现在 background 层）。[查看完整更新记录 →](CHANGELOG.md#v153--20260713)
 
