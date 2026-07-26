@@ -243,7 +243,7 @@ class TestKnowledgeScanner(unittest.TestCase):
         """KB-26: 探测到含 .md 文件的目录。"""
         md_dir = Path(self._tmpdir) / "vault"
         md_dir.mkdir()
-        (md_dir / "note.md").write_text("# Test")
+        (md_dir / "note.md").write_text("# Test", encoding="utf-8")
         from cogito_core.knowledge_scanner import KnowledgeScanner
         scanner = KnowledgeScanner()
         sources = scanner._probe_filesystem(base_dirs=[str(self._tmpdir)])
@@ -260,7 +260,7 @@ class TestKnowledgeScanner(unittest.TestCase):
         """KB-28: 探测到的源有正确的 label。"""
         md_dir = Path(self._tmpdir) / "Obsidian Vault"
         md_dir.mkdir()
-        (md_dir / "note.md").write_text("# Test")
+        (md_dir / "note.md").write_text("# Test", encoding="utf-8")
         from cogito_core.knowledge_scanner import KnowledgeScanner
         scanner = KnowledgeScanner()
         sources = scanner._probe_filesystem(base_dirs=[str(self._tmpdir)])
