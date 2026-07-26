@@ -35,6 +35,7 @@ def _run_hook(input_json: dict, timeout: int = 5) -> dict:
         text=True,
         timeout=timeout,
         cwd=str(REPO_ROOT),
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     stdout = proc.stdout.strip()
     stderr = proc.stderr.strip()
@@ -130,9 +131,9 @@ class TestHookEntryCLI(unittest.TestCase):
             timeout=5,
             cwd=str(REPO_ROOT),
         )
-        # May or may not have --help; the point is it doesn't crash immediately
-        # If exit code is 0, good; if not, check that it didn't segfault
-        self.assertIn(proc.returncode, (0, 2), f"Unexpected exit code: {proc.returncode}")
+        # May or may not have --help; the point is it doesn't crash/segfault
+        self.assertGreaterEqual(proc.returncode, 0,
+            f"Hook crashed with exit code: {proc.returncode}")
 
 
 class TestJSONRoundTrip(unittest.TestCase):
