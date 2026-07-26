@@ -423,6 +423,42 @@ def dry_run_report(platforms: List[str]) -> None:
 
 # ── CLI entry ──────────────────────────────────────────────────────────────
 
+def _install_jieba_to_hermes_venv() -> None:
+    """确保 jieba 安装到 Hermes 网关的 venv 中。"""
+    venv_pip = Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "pip"
+    if not venv_pip.exists():
+        venv_pip = Path.home() / ".hermes" / "venv" / "bin" / "pip"
+    if not venv_pip.exists():
+        return
+    try:
+        subprocess.run(
+            [str(venv_pip), "install", "jieba", "-q"],
+            check=False, timeout=60,
+        )
+    except Exception:
+        pass
+
+
+def _migrate_legacy_data() -> None:
+    """迁移 ~/.cogito/*.jsonl 旧数据到 ~/.hermes/memory/（安全合并）。
+
+    只迁移目标不存在的文件或空文件，已有数据不覆盖。
+    """
+    old = Path.home() / ".cogito"
+    new = Path.home() / ".hermes" / "memory"
+    if not old.exists():
+        return
+    new.mkdir(parents=True, exist_ok=True)
+    for f in old.glob("*.jsonl"):
+        target = new / f.name
+        if target.exists() and target.stat().st_size > 0:
+            continue  # 目标已有数据，不覆盖
+        try:
+            shutil.copy2(f, target)
+        except Exception:
+            pass
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Cogito Engine – universal AI-agent installer (macOS / Linux / Windows)",
@@ -459,10 +495,14 @@ def main() -> None:
             print(f"⚠ '{args.platform}' not detected, but will try anyway")
         bootstrap_engine()
         install_dependencies()
+        _install_jieba_to_hermes_venv()
+        _migrate_legacy_data()
         ok = install_for_platform(args.platform, update=args.update, hermes_profile=args.hermes_profile)
     else:
         bootstrap_engine()
         install_dependencies()
+        _install_jieba_to_hermes_venv()
+        _migrate_legacy_data()
         ok = True
         for p in platforms:
             if not install_for_platform(p, update=args.update, hermes_profile=args.hermes_profile):

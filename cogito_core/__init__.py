@@ -84,6 +84,9 @@ from .env_sensor import get_snapshot as get_env_snapshot
 # ── KnowledgeBridge ──
 from .knowledge_provider import KnowledgeProvider
 from .knowledge_base import KnowledgeBaseProvider
+from .hermes_tool_provider import HermesToolProvider
+from .filesystem_provider import FileSystemProvider
+from .knowledge_scanner import KnowledgeScanner, KnowledgeSource, DecisionEngine
 
 __all__ = [
     # 引擎
@@ -142,6 +145,11 @@ __all__ = [
     # KnowledgeBridge
     "KnowledgeProvider",
     "KnowledgeBaseProvider",
+    "HermesToolProvider",
+    "FileSystemProvider",
+    "KnowledgeScanner",
+    "KnowledgeSource",
+    "DecisionEngine",
     # 记忆
     "KeyframeExtractor",
     "estimate_conversation_rounds",

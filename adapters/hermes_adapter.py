@@ -359,10 +359,11 @@ class HermesAdapter:
             include_narrative=include_narrative,
             reflection_llm=reflection_llm,
         )
-        # KnowledgeBridge：注入 KnowledgeBaseProvider
-        self.engine.set_knowledge_provider(
-            KnowledgeBaseProvider(db_path=os.path.expanduser("~/.hermes/memory_store.db"))
-        )
+        # KnowledgeBridge: 多 Provider 探针 + 决策引擎
+        self._decision = None
+        self._knowledge_sources: list = []
+        self._active_provider: Any = None
+
         # 引擎状态保存在实例属性中，跨 turn 持久化
         self._state: Optional[EngineState] = None
         # turn_id 去重：防止同一 turn 被重复钩子触发
@@ -376,12 +377,16 @@ class HermesAdapter:
         在插件加载时调用，注册 hook 回调到 ctx。
         """
         logger.info("HermesAdapter 已注册，session_id=%s", getattr(ctx, "session_id", "N/A"))
+        self._ctx = ctx
 
         # 注册 hook 回调（Hermes 通过 **kwargs 调用，而非单个 ctx 参数）
         ctx.register_hook("pre_llm_call", self._pre_llm_call)
         ctx.register_hook("on_session_end", self._on_session_end)
         # MemOS Phase 4: 工具调用采集
         ctx.register_hook("post_tool_call", self._post_tool_call)
+
+        # KnowledgeBridge: 全量探针扫描
+        self._init_knowledge_bridge(ctx)
 
     def _pre_llm_call(self, **kwargs: Any) -> Optional[str]:
         """pre_llm_call hook：在 LLM 调用前返回意识 XML。
@@ -481,6 +486,69 @@ class HermesAdapter:
             )
         except Exception as exc:
             logger.debug("工具调用采集失败（不影响主流程）: %s", exc)
+
+    def _init_knowledge_bridge(self, ctx: Any) -> None:
+        """KnowledgeBridge 初始化：扫描本地知识源并决策。
+
+        0 源 → 静默；1 源 → 自动接入；2+ 源 → 等待用户选择。
+        """
+        from cogito_core.knowledge_scanner import KnowledgeScanner, DecisionEngine
+        from cogito_core.hermes_tool_provider import HermesToolProvider
+        from cogito_core.filesystem_provider import FileSystemProvider
+        from cogito_core.knowledge_base import KnowledgeBaseProvider
+
+        scanner = KnowledgeScanner(ctx=ctx)
+        sources = scanner.scan()
+
+        decision = DecisionEngine()
+        chosen = decision.decide(sources)
+
+        self._decision = decision
+        self._knowledge_sources = sources
+
+        if chosen is None:
+            if decision.needs_prompt:
+                logger.info(
+                    "KnowledgeBridge: %d sources found, waiting for user selection",
+                    len(sources),
+                )
+            else:
+                logger.debug("KnowledgeBridge: no knowledge sources found, silent degrade")
+            return
+
+        # 1 个源 → 自动接入
+        provider = self._create_provider(chosen)
+        if provider:
+            self._active_provider = provider
+            self.engine.set_knowledge_provider(provider)
+            logger.info("KnowledgeBridge: auto-connected to '%s'", chosen.label)
+
+    def _create_provider(self, source: Any) -> Any:
+        """根据 KnowledgeSource 创建对应的 Provider 实例。"""
+        from cogito_core.hermes_tool_provider import HermesToolProvider
+        from cogito_core.filesystem_provider import FileSystemProvider
+        from cogito_core.knowledge_base import KnowledgeBaseProvider
+
+        try:
+            if source.provider_type == "hermes_tool":
+                if self._ctx and hasattr(self._ctx, "tools"):
+                    tool = getattr(self._ctx, "tools", {}).get(source.tool_name)
+                    if tool:
+                        return HermesToolProvider(tool=tool, tool_name=source.tool_name)
+                return HermesToolProvider(tool_name=source.tool_name)
+            elif source.provider_type == "filesystem":
+                return FileSystemProvider(
+                    path=source.path,
+                    glob=source.glob or "*.md",
+                    label=source.label,
+                )
+            elif source.provider_type == "sqlite":
+                return KnowledgeBaseProvider(db_path=source.path)
+        except Exception as exc:
+            logger.debug("_create_provider 失败: %s", exc)
+            return None
+
+        return None
 
     def _on_session_end(self, **kwargs: Any) -> Optional[Dict[str, Any]]:
         """on_session_end hook：会话结束时的收尾操作。
