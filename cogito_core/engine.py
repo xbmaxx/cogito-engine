@@ -48,6 +48,18 @@ from .session_reflector import SessionReflector
 from . import persistence
 from .context_window import HierarchicalContextBuilder, ContextInput
 from .env_sensor import get_location, get_weather
+from .alpha_scorer import AlphaInput, compute_alpha, compute_alpha_from_entry
+from .focus_sequence import (
+    build_sequence_patterns, format_patterns_for_xml,
+)
+from .crystallization import (
+    CrystallizedSkill,
+    detect_candidates, crystallize, load_skills,
+    match_context, inject_skills,
+)
+from .tool_trace import (
+    load_traces, build_tool_insights, format_tool_insights_xml,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +229,16 @@ class CogitoEngine:
         self._latest_reflection: str = ""      # 刀1：最新反思文本
         self._cached_weather: Dict[str, Any] = {}  # 天气缓存（首条触发，后续按需刷新）
 
-        # ── 信息设计：触发指令系统 ──
+        # MemOS Phase 1: 决策指导 / α 评分
+        self._alpha_result: Optional[Any] = None  # 最新 α 评分结果
+        self._previous_msg_len: int = 0            # 上轮消息长度（用于参与度计算）
+        # MemOS Phase 2: 焦点序列
+        self._cached_seq_xml: str = ""             # 缓存最新焦点序列 XML
+        # MemOS Phase 3: 技能结晶
+        self._cached_crystallized_xml: str = ""    # 缓存最新结晶技能 XML
+        self._profile: str = "default"             # 当前 profile 标签
+        # MemOS Phase 4: 工具调用洞察
+        self._cached_tool_insights: str = ""       # 缓存最新工具调用洞察文本
         self._previous_emotion_label: Optional[str] = None  # 上一轮情绪标签
         self._emotion_trend_count: int = 0  # 趋势连续同向轮数
         self.knowledge_provider: Optional[Any] = None  # KnowledgeBridge 提供者（延迟设置）
@@ -338,6 +359,21 @@ class CogitoEngine:
                 )
             except Exception:
                 pass
+
+        # ── 5b. MemOS Phase 1: α 评分（在情感分析之后）──
+        alpha_val = 0.0
+        if msg_text:
+            focus_depth = len(state.focus_stack.stack) if state.focus_stack.stack else 0
+            alpha_val = self._compute_alpha(msg_text, focus_depth)
+
+        # ── 5c. MemOS Phase 4: 工具调用洞察 ──
+        try:
+            traces = load_traces(k=50)
+            if traces:
+                insights = build_tool_insights(traces)
+                self._cached_tool_insights = format_tool_insights_xml(insights)
+        except Exception:
+            pass
 
         # ── 5.5 心跳叙事（可选模块，v1.4 新增）──
         heartbeat_line = None
@@ -614,6 +650,100 @@ class CogitoEngine:
             return "最近情绪有些低落"
         return ""
 
+    # ── MemOS Phase 1: α 评分 ──
+
+    def _compute_alpha(self, msg_text: str, focus_depth: int) -> float:
+        """计算当前回合的 α 评分。
+
+        Args:
+            msg_text: 本轮用户消息文本
+            focus_depth: 当前焦点栈深度
+
+        Returns:
+            α 评分 [0, 1]
+        """
+        # 情绪强度：从最近一次 emotion_history 读取
+        sentiment = 0.5
+        try:
+            entries = persistence.load_emotion_history(1)
+            if entries:
+                sentiment = float(entries[0].get("sentiment", 0.5))
+        except Exception:
+            pass
+
+        # 话题频次：从 cross_session_patterns 统计
+        topic_count = None
+        try:
+            narratives = persistence.load_narrative_since(days=30)
+            if len(narratives) >= 5:
+                from collections import Counter
+                tc = Counter()
+                for n in narratives:
+                    for t in n.get("focus_topics", []):
+                        if t and len(str(t)) > 1:
+                            tc[str(t)] += 1
+                if tc:
+                    topic_count = tc.most_common(1)[0][1]
+        except Exception:
+            pass
+
+        inp = AlphaInput(
+            sentiment=sentiment,
+            focus_depth=focus_depth,
+            topic_count=topic_count,
+            current_msg_len=len(msg_text),
+            prev_msg_len=self._previous_msg_len,
+        )
+
+        # 更新上轮消息长度
+        self._previous_msg_len = len(msg_text)
+
+        result = compute_alpha(inp)
+        self._alpha_result = result
+        return result.alpha
+
+    def _build_guidance(self, narrative_data: Optional[List[Dict[str, Any]]]) -> str:
+        """从叙事数据构建决策指导（Prefer/Avoid）。
+
+        从 narrative 的 insights 和 unresolved 提取：
+        - insights 中正面/完成性内容 → Prefer
+        - unresolved 中持续出现的问题 → Avoid
+
+        Args:
+            narrative_data: 最近叙事条目列表
+
+        Returns:
+            决策指导文本，如 "多主动提提上次端口配置的事"
+            无数据时返回 ""。
+        """
+        if not narrative_data:
+            return ""
+
+        prefers: List[str] = []
+        avoids: List[str] = []
+
+        for n in narrative_data:
+            # insights → prefer
+            ins = n.get("insights", "").strip()
+            if ins and ins != "无":
+                # 简单启发：含积极词汇的 insight 可提炼为 prefer
+                positive_markers = ["关注", "偏好", "喜欢", "积极", "侧重", "倾向于"]
+                if any(m in ins for m in positive_markers):
+                    prefers.append(ins)
+
+            # unresolved → avoid (反复出现的问题)
+            u = n.get("unresolved", "").strip()
+            if u and u != "无":
+                avoids.append(f"避免在未询问时深入{u}")
+
+        parts: List[str] = []
+        if prefers:
+            parts.append("可参考：" + "；".join(prefers[:2]))
+        if avoids:
+            parts.append("注意：" + "；".join(avoids[:2]))
+
+        return " | ".join(parts) if parts else ""
+
     # ── P2 回馈：跨会话模式检测 ──
 
     def _build_cross_session_patterns(self) -> List[str]:
@@ -628,20 +758,27 @@ class CogitoEngine:
             ["你反复提到Cogito Engine——最近经常出现"]
         """
         narratives = persistence.load_narrative_since(days=30)
-        if len(narratives) < 5:
+        if len(narratives) < 3:
             return []
 
-        # 话题共现聚类
+        # MemOS Phase 2: 使用焦点序列检测引擎
+        emotion_data = None
+        try:
+            emotion_data = persistence.load_emotion_history(len(narratives))
+        except Exception:
+            pass
+
+        # 原有话题频次检测保留（作为 baseline）
         topic_counts: Counter = Counter()
         for n in narratives:
             for t in n.get("focus_topics", []):
                 if t and len(str(t)) > 1:
                     topic_counts[str(t)] += 1
 
-        patterns: List[str] = []
+        legacy_patterns: List[str] = []
         for topic, count in topic_counts.most_common(5):
             if count >= 3:
-                patterns.append(f"你反复提到{topic}——最近经常出现")
+                legacy_patterns.append(f"你反复提到{topic}——最近经常出现")
 
         # 反复出现的未解决问题
         unresolved_counts: Counter = Counter()
@@ -653,9 +790,28 @@ class CogitoEngine:
 
         for u, count in unresolved_counts.most_common(3):
             if count >= 2:
-                patterns.append(f"{u}……这个问题出现了{count}次")
+                legacy_patterns.append(f"{u}……这个问题出现了{count}次")
 
-        return patterns[:3]
+        # Phase 2 新增：焦点序列检测
+        seq_patterns = build_sequence_patterns(
+            narratives, emotion_data,
+            pair_min=3, emotion_min=3, path_min=2,
+        )
+        seq_xml = format_patterns_for_xml(seq_patterns)
+
+        # 缓存焦点序列 XML（供 _assemble_xml 使用）
+        self._cached_seq_xml = seq_xml
+
+        # 合并：legacy + sequence
+        all_patterns = list(legacy_patterns[:2])  # 最多保留 2 条历史模式
+        if seq_patterns:
+            # 有序列模式时，legacy 压缩到 1 条
+            all_patterns = list(legacy_patterns[:1])
+            all_patterns.extend(
+                p.description for p in seq_patterns[:2]
+            )
+
+        return all_patterns[:3]
 
     # ── 信息设计：触发指令系统 ──
 
@@ -1066,6 +1222,17 @@ class CogitoEngine:
             now_period=now_period,
             now_hour=now.hour,
             tick_count=state.ticker.tick_counter,
+            # MemOS Phase 1
+            alpha_score=self._alpha_result.alpha if self._alpha_result else 0.0,
+            alpha_key_signals=self._alpha_result.weighted if self._alpha_result else {},
+            guidance=self._build_guidance(narrative_data) if narrative_data else "",
+            untrusted_prefix=True,
+            # MemOS Phase 2
+            recurring_patterns=self._cached_seq_xml,
+            # MemOS Phase 3
+            crystallized_skills=self._cached_crystallized_xml,
+            # MemOS Phase 4
+            tool_insights=self._cached_tool_insights,
         )
 
         return builder.assemble_xml(inp)
@@ -1327,6 +1494,42 @@ class CogitoEngine:
             )
         except Exception as exc:
             logger.error("保存叙事记忆失败: %s", exc)
+
+        # ── MemOS Phase 2: 保存焦点序列 ──
+        try:
+            focus_topics_save: List[str] = []
+            if self._cached_seq_xml:
+                # 安全获取 unique 变量
+                try:
+                    focus_topics_save = unique
+                except NameError:
+                    focus_topics_save = []
+                persistence.save_focus_sequence({
+                    "session_id": state.session_id,
+                    "focus_topics": focus_topics_save,
+                    "patterns_summary": self._cached_seq_xml[:200],
+                })
+        except Exception as exc:
+            logger.error("保存焦点序列失败: %s", exc)
+
+        # ── MemOS Phase 3: 技能结晶检测 + 落库 ──
+        try:
+            narratives = persistence.load_narrative_since(days=30)
+            candidates = detect_candidates(narratives, min_alpha=0.7, min_count=3)
+            for cand in candidates:
+                crystallize(cand, profile=self._profile)
+            # 缓存已结晶的技能
+            all_skills = load_skills(profile=self._profile, min_confidence=0.5)
+            # 按当前焦点话题匹配
+            focus_topics_matched: List[str] = []
+            try:
+                focus_topics_matched = unique
+            except NameError:
+                pass
+            matched = match_context(all_skills, focus_topics_matched) if focus_topics_matched else all_skills
+            self._cached_crystallized_xml = inject_skills(matched, max_count=3)
+        except Exception as exc:
+            logger.debug("技能结晶检测失败: %s", exc)
 
     def _run_deferred_reflection(self) -> None:
         """执行延迟反射：对 pending 条目用 LLM 生成摘要 → 回写。

@@ -380,6 +380,8 @@ class HermesAdapter:
         # 注册 hook 回调（Hermes 通过 **kwargs 调用，而非单个 ctx 参数）
         ctx.register_hook("pre_llm_call", self._pre_llm_call)
         ctx.register_hook("on_session_end", self._on_session_end)
+        # MemOS Phase 4: 工具调用采集
+        ctx.register_hook("post_tool_call", self._post_tool_call)
 
     def _pre_llm_call(self, **kwargs: Any) -> Optional[str]:
         """pre_llm_call hook：在 LLM 调用前返回意识 XML。
@@ -447,7 +449,38 @@ class HermesAdapter:
 
         except Exception as exc:
             logger.error("pre_llm_call 失败: %s", exc, exc_info=True)
-            return None
+            return consciousness_xml
+
+    # ── MemOS Phase 4: 工具调用采集 ──
+
+    def _post_tool_call(self, **kwargs: Any) -> None:
+        """post_tool_call hook：采集工具调用记录。
+
+        Hermes 签名：cb(tool_name, args, result, task_id, session_id,
+                        tool_call_id, turn_id, duration_ms, status, ...)
+        """
+        try:
+            from cogito_core.tool_trace import collect_tool_call
+
+            # 多 key 回退获取 session_id（不同 Hermes 版本可能用不同 key）
+            sid = (
+                kwargs.get("session_id", "")
+                or kwargs.get("task_id", "")
+                or kwargs.get("turn_id", "")
+            )
+
+            collect_tool_call(
+                tool_name=kwargs.get("tool_name", ""),
+                args=kwargs.get("args"),
+                result=kwargs.get("result"),
+                status=kwargs.get("status", "ok"),
+                error_type=kwargs.get("error_type"),
+                error_message=kwargs.get("error_message"),
+                duration_ms=kwargs.get("duration_ms", 0),
+                session_id=sid,
+            )
+        except Exception as exc:
+            logger.debug("工具调用采集失败（不影响主流程）: %s", exc)
 
     def _on_session_end(self, **kwargs: Any) -> Optional[Dict[str, Any]]:
         """on_session_end hook：会话结束时的收尾操作。

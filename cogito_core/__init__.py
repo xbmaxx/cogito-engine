@@ -20,6 +20,36 @@ cogito_core —— 平台无关的意识引擎核心包。
 # ── 主入口 ──
 from .engine import CogitoEngine, EngineState
 
+# ── α 评分引擎 ──
+from .alpha_scorer import (
+    AlphaInput, AlphaResult,
+    compute_alpha, compute_alpha_from_entry, format_alpha_xml_comment,
+)
+
+# ── 焦点序列检测 ──
+from .focus_sequence import (
+    FocusPoint, DetectedPattern,
+    extract_focus_points,
+    detect_focus_pairs, detect_emotion_correlations,
+    detect_path_jumps, build_sequence_patterns,
+    format_patterns_for_xml,
+)
+
+# ── 技能结晶引擎 ──
+from .crystallization import (
+    CrystallizationCandidate, CrystallizedSkill,
+    detect_candidates, crystallize, load_skills,
+    match_context, inject_skills,
+)
+
+# ── 工具调用采集 ──
+from .tool_trace import (
+    ToolTrace, ErrorPattern,
+    collect_tool_call, load_traces, clear_traces,
+    analyze_error_patterns, build_tool_insights,
+    format_tool_insights_xml,
+)
+
 # ── 核心模块 ──
 from .ticker import Ticker
 from .focus_stack import FocusStack
@@ -59,6 +89,38 @@ __all__ = [
     # 引擎
     "CogitoEngine",
     "EngineState",
+    # α 评分
+    "AlphaInput",
+    "AlphaResult",
+    "compute_alpha",
+    "compute_alpha_from_entry",
+    "format_alpha_xml_comment",
+    # 焦点序列
+    "FocusPoint",
+    "DetectedPattern",
+    "extract_focus_points",
+    "detect_focus_pairs",
+    "detect_emotion_correlations",
+    "detect_path_jumps",
+    "build_sequence_patterns",
+    "format_patterns_for_xml",
+    # 技能结晶
+    "CrystallizationCandidate",
+    "CrystallizedSkill",
+    "detect_candidates",
+    "crystallize",
+    "load_skills",
+    "match_context",
+    "inject_skills",
+    # 工具调用采集
+    "ToolTrace",
+    "ErrorPattern",
+    "collect_tool_call",
+    "load_traces",
+    "clear_traces",
+    "analyze_error_patterns",
+    "build_tool_insights",
+    "format_tool_insights_xml",
     # 核心
     "Ticker",
     "FocusStack",
@@ -89,4 +151,4 @@ __all__ = [
     "persistence",
 ]
 
-__version__ = "1.5.3"
+__version__ = "1.6.0"

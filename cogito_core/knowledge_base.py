@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .knowledge_provider import KnowledgeProvider
+from .persistence import get_cogito_home
 
 logger = logging.getLogger(__name__)
 
@@ -114,9 +115,7 @@ class KnowledgeBaseProvider(KnowledgeProvider):
     """从 Hermes fact_store 检索知识。支持 LIKE + 本地嵌入两路并行检索。"""
 
     def __init__(self, db_path: Optional[str] = None):
-        self.db_path = db_path or os.path.expanduser(
-            "~/.cogito/knowledge_base.db"
-        )
+        self.db_path = db_path or str(get_cogito_home() / "knowledge_base.db")
         # LRU 缓存：query → (embedding, timestamp)
         self._emb_cache: Dict[str, tuple] = {}
         # 标记 embedding 列是否已就绪

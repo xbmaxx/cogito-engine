@@ -32,6 +32,7 @@ MAX_FOCUS_HISTORY = 200
 MAX_EMOTION_HISTORY = 2000
 MAX_NARRATIVE = 200
 MAX_REFLECTIONS = 500
+MAX_FOCUS_SEQUENCE = 200
 
 
 def set_cogito_home(path: str) -> None:
@@ -226,6 +227,69 @@ def save_narrative(entry: Dict[str, Any]) -> None:
     """
     _append_jsonl(NARRATIVE_FILE, entry)
     _trim_jsonl(NARRATIVE_FILE, MAX_NARRATIVE)
+
+
+# ── 焦点序列 ──
+
+FOCUS_SEQUENCE_FILE = "focus_sequence.jsonl"
+
+
+def save_focus_sequence(entry: Dict[str, Any]) -> None:
+    """保存一条焦点序列条目。
+
+    Args:
+        entry: 焦点序列条目 dict
+            格式：{
+                "timestamp": ISO8601,
+                "session_id": str,
+                "focus_topics": [str],
+                "patterns": [DetectedPattern.to_dict()],
+            }
+    """
+    entry.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+    _append_jsonl(FOCUS_SEQUENCE_FILE, entry)
+    _trim_jsonl(FOCUS_SEQUENCE_FILE, MAX_FOCUS_SEQUENCE)
+
+
+def load_focus_sequences(k: int = 20) -> List[Dict[str, Any]]:
+    """加载最近 k 条焦点序列条目。
+
+    Args:
+        k: 返回条数
+
+    Returns:
+        最近 k 条焦点序列条目（按时间倒序）。
+    """
+    entries = _read_jsonl(FOCUS_SEQUENCE_FILE)
+    return entries[-k:] if entries else []
+
+
+def load_focus_sequence_since(days: int = 30) -> List[Dict[str, Any]]:
+    """加载指定天数内的焦点序列条目。
+
+    Args:
+        days: 回溯天数
+
+    Returns:
+        指定时间范围内的焦点序列条目。
+    """
+    entries = _read_jsonl(FOCUS_SEQUENCE_FILE)
+    if not entries:
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    result = []
+    for e in entries:
+        ts = e.get("timestamp", "")
+        if ts:
+            try:
+                entry_dt = datetime.fromisoformat(ts)
+                if entry_dt.tzinfo is None:
+                    entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+                if entry_dt >= cutoff:
+                    result.append(e)
+            except (ValueError, TypeError):
+                result.append(e)
+    return result
 
 
 def load_narrative(k: int = 3) -> List[Dict[str, Any]]:

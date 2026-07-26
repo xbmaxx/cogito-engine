@@ -96,6 +96,25 @@ class ContextInput:
     # system
     tick_count: int = 0
 
+    # MemOS Phase 1: α 评分
+    alpha_score: float = 0.0              # [0, 1] 综合 α
+    alpha_key_signals: Dict[str, float] = field(default_factory=dict)  # 各因子明细
+
+    # MemOS Phase 1: 决策指导
+    guidance: str = ""                     # Prefer/Avoid 规则文本
+
+    # MemOS Phase 1: [UNTRUSTED DATA] 安全包裹
+    untrusted_prefix: bool = False         # 是否包裹 background 层
+
+    # MemOS Phase 2: 焦点序列 XML
+    recurring_patterns: str = ""           # 已格式化的 <recurring_patterns> XML 片段
+
+    # MemOS Phase 3: 结晶技能 XML
+    crystallized_skills: str = ""          # 已格式化的 <crystallized_skills> XML 片段
+
+    # MemOS Phase 4: 工具调用洞察 XML
+    tool_insights: str = ""                # 已格式化的 <tool_insights> XML 片段
+
 
 class HierarchicalContextBuilder:
     """将 ContextInput 转换为三层 ContextBands。
@@ -158,8 +177,15 @@ class HierarchicalContextBuilder:
     def _build_working(self, inp: ContextInput) -> str:
         lines: List[str] = []
 
-        # 上次会话叙事摘要
-        if inp.last_session_summary:
+        # 上次会话叙事摘要（带 α 重要性，首次消息时注入）
+        if inp.last_session_summary and inp.alpha_score > 0:
+            summary = inp.last_session_summary
+            if len(summary) > 80:
+                summary = summary[:77] + "..."
+            lines.append(
+                f"上次的事：{summary}（重要度: {inp.alpha_score:.2f}）"
+            )
+        elif inp.last_session_summary:
             summary = inp.last_session_summary
             if len(summary) > 80:
                 summary = summary[:77] + "..."
@@ -202,6 +228,10 @@ class HierarchicalContextBuilder:
         if inp.unresolved_topics:
             lines.append(f"上次没聊完：{' · '.join(inp.unresolved_topics[:2])}")
 
+        # MemOS: 决策指导（guidance）
+        if inp.guidance:
+            lines.append(inp.guidance.strip())
+
         return "\n".join(lines) if lines else ""
 
     # ── background ─────────────────────────────────────────────────────
@@ -229,6 +259,18 @@ class HierarchicalContextBuilder:
         if env_parts:
             lines.append(" · ".join(env_parts))
 
+        # MemOS Phase 2: 焦点序列模式（纯 XML，不套在自然语言里）
+        if inp.recurring_patterns:
+            lines.append(inp.recurring_patterns)
+
+        # MemOS Phase 3: 结晶技能（纯 XML）
+        if inp.crystallized_skills:
+            lines.append(inp.crystallized_skills)
+
+        # MemOS Phase 4: 工具调用洞察（纯 XML）
+        if inp.tool_insights:
+            lines.append(inp.tool_insights)
+
         # 跨会话模式 / 触发指令（截断最多 3 条）
         if inp.cross_session_patterns:
             lines.extend(inp.cross_session_patterns[:3])
@@ -237,6 +279,11 @@ class HierarchicalContextBuilder:
         # 折叠规则：内容为空时才省略（位置信息即使短也有意义）
         if not result.strip():
             return ""
+
+        # MemOS: [UNTRUSTED DATA] 安全包裹
+        if inp.untrusted_prefix and result.strip():
+            result = "[UNTRUSTED DATA]\n" + result + "\n[/UNTRUSTED DATA]"
+
         return result
 
     # ── 人味翻译（刀3: 去掉 AI 报告腔）──────────────────────────────
