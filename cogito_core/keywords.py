@@ -227,6 +227,7 @@ def extract_keywords(text: str, max_keywords: int = 8) -> list[str]:
     if not text:
         return []
 
-    if _HAS_JIEBA:
-        return _extract_jieba(text, max_keywords)
-    return _extract_ngram(text, max_keywords)
+    kws = _extract_jieba(text, max_keywords) if _HAS_JIEBA else _extract_ngram(text, max_keywords)
+    # 质量门：过滤 jieba 从代码/URL 中切出的标点碎片
+    _GARBAGE_KW = frozenset({')(', '()', ').', "('", "')", ").", "',", ":", ".'", '->'})
+    return [kw for kw in kws if kw.strip() not in _GARBAGE_KW and any(c.isalnum() for c in kw)]

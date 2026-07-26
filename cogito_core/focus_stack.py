@@ -61,6 +61,17 @@ class FocusStack:
         if not topic_keywords:
             return {"action": "none", "frame": {}, "depth": len(self.stack)}
 
+        # 质量门：过滤纯标点、碎片关键词（状态恢复路径常有此类数据）
+        _GARBAGE = frozenset({")", ".", "'. ", ", ", ":", ".'", ").", "',", ":)", ":)", "::"})
+        topic_keywords = [
+            kw for kw in topic_keywords
+            if len(str(kw).strip()) >= 2
+            and str(kw).strip() not in _GARBAGE
+            and any(c.isalnum() for c in str(kw))
+        ]
+        if not topic_keywords:
+            return {"action": "none", "frame": {}, "depth": len(self.stack)}
+
         # ── v1 LLM 仲裁（焦点分类器） ──
         classification = None
         if classifier_fn:

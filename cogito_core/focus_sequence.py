@@ -17,6 +17,24 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+
+_GARBAGE_KEYWORDS = frozenset({
+    ").", "',", "):", ".'", ":)", "::", "->", "=>",
+    "..", "。。", "--", "---", "==", "//", "**",
+})
+
+
+def _is_garbage_keyword(t: str) -> bool:
+    t = str(t).strip()
+    if not t or len(t) < 2:
+        return True
+    if t in _GARBAGE_KEYWORDS:
+        return True
+    if not any(c.isalnum() for c in t):
+        return True
+    return False
+
+
 # ── 数据类 ──
 
 
@@ -90,7 +108,7 @@ def extract_focus_points(
         ts = n.get("timestamp", "")
         for t in n.get("focus_topics", []):
             t_str = str(t).strip()
-            if not t_str or len(t_str) <= 1:
+            if _is_garbage_keyword(t_str):
                 continue
             points.append(FocusPoint(
                 topic=t_str,
@@ -135,7 +153,7 @@ def detect_focus_pairs(
         topics = n.get("focus_topics", [])
         for t in topics:
             t_str = str(t).strip()
-            if t_str and len(t_str) > 1:
+            if not _is_garbage_keyword(t_str):
                 session_topics[sid].add(t_str)
 
     # 统计跨 session 焦点对

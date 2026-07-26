@@ -202,6 +202,7 @@ class CogitoEngine:
         include_resources: bool = True,
         include_emotion: bool = True,
         include_narrative: bool = True,
+        include_tool_insights: bool = False,
         reflection_llm: Optional[Callable[[str], str]] = None,
         emotion_model: str = "affect_mapper",
     ) -> None:
@@ -222,6 +223,7 @@ class CogitoEngine:
         self.include_resources = include_resources
         self.include_emotion = include_emotion
         self.include_narrative = include_narrative
+        self.include_tool_insights = include_tool_insights
         self._heartbeat_mapper = None   # 延迟加载，避免 import 失败阻断主链路
         self._reflection_llm = reflection_llm  # deferred reflection LLM 函数
         self._session_messages: List[Dict[str, Any]] = []  # 消息缓存，end_session 使用
@@ -366,14 +368,15 @@ class CogitoEngine:
             focus_depth = len(state.focus_stack.stack) if state.focus_stack.stack else 0
             alpha_val = self._compute_alpha(msg_text, focus_depth)
 
-        # ── 5c. MemOS Phase 4: 工具调用洞察 ──
-        try:
-            traces = load_traces(k=50)
-            if traces:
-                insights = build_tool_insights(traces)
-                self._cached_tool_insights = format_tool_insights_xml(insights)
-        except Exception:
-            pass
+        # ── 5c. MemOS Phase 4: 工具调用洞察（仅开启时注入LLM）──
+        if self.include_tool_insights:
+            try:
+                traces = load_traces(k=50)
+                if traces:
+                    insights = build_tool_insights(traces)
+                    self._cached_tool_insights = format_tool_insights_xml(insights)
+            except Exception:
+                pass
 
         # ── 5.5 心跳叙事（可选模块，v1.4 新增）──
         heartbeat_line = None
@@ -734,7 +737,8 @@ class CogitoEngine:
             # unresolved → avoid (反复出现的问题)
             u = n.get("unresolved", "").strip()
             if u and u != "无":
-                avoids.append(f"避免在未询问时深入{u}")
+                u_short = u[:60]
+                avoids.append(f"在未询问时不要主动提起\u300c{u_short}\u300d")
 
         parts: List[str] = []
         if prefers:
@@ -768,19 +772,7 @@ class CogitoEngine:
         except Exception:
             pass
 
-        # 原有话题频次检测保留（作为 baseline）
-        topic_counts: Counter = Counter()
-        for n in narratives:
-            for t in n.get("focus_topics", []):
-                if t and len(str(t)) > 1:
-                    topic_counts[str(t)] += 1
-
-        legacy_patterns: List[str] = []
-        for topic, count in topic_counts.most_common(5):
-            if count >= 3:
-                legacy_patterns.append(f"你反复提到{topic}——最近经常出现")
-
-        # 反复出现的未解决问题
+        # 反复出现的未解决问题（话题频次由 recurring_patterns XML 覆盖）
         unresolved_counts: Counter = Counter()
         for n in narratives:
             u = n.get("unresolved", "").strip()
@@ -788,9 +780,10 @@ class CogitoEngine:
                 key = u[:20]
                 unresolved_counts[key] += 1
 
+        unresolved_patterns: List[str] = []
         for u, count in unresolved_counts.most_common(3):
             if count >= 2:
-                legacy_patterns.append(f"{u}……这个问题出现了{count}次")
+                unresolved_patterns.append(f"{u}……这个问题出现了{count}次")
 
         # Phase 2 新增：焦点序列检测
         seq_patterns = build_sequence_patterns(
@@ -802,11 +795,9 @@ class CogitoEngine:
         # 缓存焦点序列 XML（供 _assemble_xml 使用）
         self._cached_seq_xml = seq_xml
 
-        # 合并：legacy + sequence
-        all_patterns = list(legacy_patterns[:2])  # 最多保留 2 条历史模式
+        # 合并：unresolved 模式 + 序列模式
+        all_patterns = list(unresolved_patterns[:2])
         if seq_patterns:
-            # 有序列模式时，legacy 压缩到 1 条
-            all_patterns = list(legacy_patterns[:1])
             all_patterns.extend(
                 p.description for p in seq_patterns[:2]
             )
@@ -1160,15 +1151,16 @@ class CogitoEngine:
             loc_data = get_location()
         except Exception:
             pass
-        location = loc_data.get("city", "")
+        location = loc_data.get("city", "") if is_first else ""
 
         weather_str = ""
-        weather_data = self._cached_weather
-        if weather_data.get("available"):
-            weather_str = (
-                f"{weather_data['weather']} {weather_data['temperature']}°C "
-                f"湿度{weather_data['humidity']}%"
-            )
+        if is_first:
+            weather_data = self._cached_weather
+            if weather_data.get("available"):
+                weather_str = (
+                    f"{weather_data['weather']} {weather_data['temperature']}°C "
+                    f"湿度{weather_data['humidity']}%"
+                )
 
         # ── 提取反射话题（断链修复）──
         reflection_topics: List[str] = []
