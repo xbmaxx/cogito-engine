@@ -139,13 +139,15 @@ class FileSystemProvider(KnowledgeProvider):
             try:
                 text = fp.read_text(encoding="utf-8", errors="ignore")
                 text = self._remove_frontmatter(text)
-                if all(kw in text.lower() for kw in keywords):
-                    # 提取匹配行
-                    for line in text.split("\n"):
-                        if all(kw in line.lower() for kw in keywords):
-                            results.append(line.strip()[:300])
-                            if len(results) >= limit:
-                                return results
+                # 检查文件级匹配：所有关键词都在文件中
+                if not all(kw in text.lower() for kw in keywords):
+                    continue
+                # 提取匹配行（只需包含任一关键词即可）
+                for line in text.split("\n"):
+                    if any(kw in line.lower() for kw in keywords) and line.strip():
+                        results.append(line.strip()[:300])
+                        if len(results) >= limit:
+                            return results
             except Exception:
                 continue
         return results[:limit]
