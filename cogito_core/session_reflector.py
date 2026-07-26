@@ -13,23 +13,23 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .keyframe_extractor import KeyframeExtractor, estimate_conversation_rounds
+from .persistence import get_cogito_home
 
 logger = logging.getLogger(__name__)
 
-_COGITO_HOME = Path(
-    os.environ.get("COGITO_HOME", os.path.expanduser("~/.cogito"))
-)
+# ⚠️ 弃用：_COGITO_HOME 保留仅为兼容旧版 plugin __init__.py 的直接赋值；
+# _reflections_file() 已改为从 persistence.get_cogito_home() 统一读取。
+_COGITO_HOME = Path.home() / ".cogito"
 
 
 def _reflections_file() -> Path:
-    _COGITO_HOME.mkdir(parents=True, exist_ok=True)
-    return _COGITO_HOME / "session_reflections.jsonl"
+    home = get_cogito_home()
+    return home / "session_reflections.jsonl"
 
 
 class SessionReflector:

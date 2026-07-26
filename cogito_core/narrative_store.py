@@ -11,30 +11,31 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from .persistence import get_cogito_home as _get_persistence_home
+from .persistence import set_cogito_home as _set_persistence_home
 
 logger = logging.getLogger(__name__)
 
 # ── 持久化路径 ──
 
-_COGITO_HOME = Path(
-    os.environ.get("COGITO_HOME", os.path.expanduser("~/.cogito"))
-)
+# 本地覆盖（测试用）——不改 persistence 全局，避免破坏测试隔离
+_LOCAL_HOME: Optional[Path] = None
 
 
 def set_cogito_home(path: str) -> None:
-    """重设 cogito 持久化目录（测试或自定义部署用）。"""
-    global _COGITO_HOME
-    _COGITO_HOME = Path(path)
+    """重设 cogito 持久化目录。委托给 persistence，本模块仅保留兼容接口。"""
+    _set_persistence_home(path)
 
 
 def _narrative_file() -> Path:
-    """返回叙事文件路径。"""
-    _COGITO_HOME.mkdir(parents=True, exist_ok=True)
-    return _COGITO_HOME / "narrative.jsonl"
+    """返回叙事文件路径。本地覆盖优先，回退到 persistence 统一目录。"""
+    home = _LOCAL_HOME if _LOCAL_HOME is not None else _get_persistence_home()
+    home.mkdir(parents=True, exist_ok=True)
+    return home / "narrative.jsonl"
 
 
 # ── 叙事条目结构 ──
