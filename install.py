@@ -425,18 +425,49 @@ def dry_run_report(platforms: List[str]) -> None:
 
 def _install_jieba_to_hermes_venv() -> None:
     """确保 jieba 安装到 Hermes 网关的 venv 中。"""
-    venv_pip = Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "pip"
-    if not venv_pip.exists():
-        venv_pip = Path.home() / ".hermes" / "venv" / "bin" / "pip"
-    if not venv_pip.exists():
-        return
-    try:
-        subprocess.run(
-            [str(venv_pip), "install", "jieba", "-q"],
-            check=False, timeout=60,
-        )
-    except Exception:
-        pass
+    # 多路径探测，覆盖不同 Hermes 版本的 venv 位置
+    candidates = [
+        Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "pip",
+        Path.home() / ".hermes" / "venv" / "bin" / "pip",
+        Path.home() / ".hermes" / "hermes-web-ui" / "desktop-runtime" / "hermes" / "0.19.0" / "mac-arm64" / "python" / "bin" / "pip3",
+    ]
+    # 额外：递归搜索 ~/.hermes/ 下所有 pip/pip3
+    hermes_dir = Path.home() / ".hermes"
+    if hermes_dir.exists():
+        try:
+            for p in hermes_dir.rglob("pip"):
+                if p.is_file() and "venv" in str(p) or "python" in str(p.parent):
+                    candidates.append(p)
+            for p in hermes_dir.rglob("pip3"):
+                if p.is_file() and ("venv" in str(p) or "python" in str(p.parent)):
+                    candidates.append(p)
+        except Exception:
+            pass
+
+    installed = False
+    for venv_pip in candidates:
+        if not venv_pip.exists():
+            continue
+        try:
+            result = subprocess.run(
+                [str(venv_pip), "install", "jieba", "-q"],
+                check=False, timeout=60, capture_output=True,
+            )
+            if result.returncode == 0:
+                installed = True
+                break
+        except Exception:
+            continue
+
+    if not installed:
+        # 最后兜底：用系统 pip 装（Hermes venv 可能继承系统 site-packages）
+        try:
+            subprocess.run(
+                ["pip3", "install", "jieba", "-q"],
+                check=False, timeout=60,
+            )
+        except Exception:
+            pass
 
 
 def _migrate_legacy_data() -> None:
