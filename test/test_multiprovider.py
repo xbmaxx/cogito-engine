@@ -155,7 +155,7 @@ class TestFileSystemProvider(unittest.TestCase):
     def _write_md(self, name: str, content: str):
         p = Path(self._tmpdir) / name
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
+        p.write_text(content, encoding="utf-8")
         return str(p)
 
     # ── 构造 ──
