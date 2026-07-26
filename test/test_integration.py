@@ -61,6 +61,14 @@ except ImportError as e:
     ENGINE_OK = False
     _engine_err = str(e)
 
+# IT-11/IT-12/IT-14 需要 deferred reflection LLM，CI 无 API Key 时应跳过
+try:
+    from adapters.hermes_adapter import _build_reflection_llm
+    _llm = _build_reflection_llm()
+    REFLECTION_OK = _llm is not None
+except Exception:
+    REFLECTION_OK = False
+
 
 @unittest.skipUnless(ENGINE_OK, f"cogito_core not importable: {locals().get('_engine_err', '?')}")
 class TestAdapterHookPipeline(unittest.TestCase):
@@ -325,12 +333,14 @@ class TestSessionEndPipeline(unittest.TestCase):
             self.engine.process(messages, self.state)
         self.engine.end_session(self.state, messages, focus_summary=msgs[-1])
 
+    @unittest.skipUnless(REFLECTION_OK, "deferred reflection LLM not available")
     def test_it11_end_session_persists_narrative(self):
         """IT-11: end_session() 后 narrative.jsonl 有写入。"""
         self._run_session(["Docker端口排查", "日志分析", "配置修正"])
         narratives = persistence.load_narrative(k=5)
         self.assertGreaterEqual(len(narratives), 1)
 
+    @unittest.skipUnless(REFLECTION_OK, "deferred reflection LLM not available")
     def test_it12_end_session_persists_focus_sequence(self):
         """IT-12: end_session() 后 focus_sequence.jsonl 有写入。"""
         self._run_session(["Docker端口排查", "端口映射", "网络配置"])
