@@ -32,10 +32,9 @@ def _run_hook(input_json: dict, timeout: int = 5) -> dict:
         [sys.executable, str(HOOK_ENTRY)],
         input=json.dumps(input_json, ensure_ascii=False),
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         timeout=timeout,
         cwd=str(REPO_ROOT),
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     stdout = proc.stdout.strip()
     stderr = proc.stderr.strip()
@@ -108,7 +107,7 @@ class TestHookEntryJSONProtocol(unittest.TestCase):
                 [sys.executable, str(HOOK_ENTRY)],
                 input="not valid json {{{",
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
                 timeout=2,
                 cwd=str(REPO_ROOT),
             )
@@ -127,7 +126,7 @@ class TestHookEntryCLI(unittest.TestCase):
         proc = subprocess.run(
             [sys.executable, str(HOOK_ENTRY), "--help"],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
             timeout=5,
             cwd=str(REPO_ROOT),
         )
