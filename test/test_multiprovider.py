@@ -304,7 +304,7 @@ class TestKnowledgeScanner(unittest.TestCase):
     def test_kb32_scanner_ignores_empty_sqlite(self):
         """KB-32: 空 SQLite 文件不返回。"""
         db_path = Path(self._tmpdir) / "empty.db"
-        db_path.write_text("")
+        db_path.write_text("", encoding="utf-8")
         from cogito_core.knowledge_scanner import KnowledgeScanner
         scanner = KnowledgeScanner()
         sources = scanner._probe_sqlite(base_paths=[str(self._tmpdir)])
