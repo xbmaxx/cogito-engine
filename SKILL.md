@@ -1,12 +1,12 @@
 ---
 name: cogito-engine
-version: 1.5.5
-description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆."
+version: 1.6.0
+description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. MemOS 能力整合（四阶段）：α 价值评分引擎、[UNTRUSTED DATA] 安全包裹、决策指导 (Prefer/Avoid)、焦点序列检测、技能结晶引擎、工具调用采集。Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector, Alpha Scorer) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆, α评分, memos, 价值评分, 决策指导, 焦点序列, 技能结晶, 工具采集."
 ---
 
-# Cogito Engine v1.5.5
+# Cogito Engine v1.6.0
 
-> **v1.5.5 更新** — KnowledgeBridge 全线升级：本地语义检索 + 自动行为指引 + 通用知识库命名。详见下文。
+> **v1.6.0 更新** — MemOS 能力整合（四阶段）：α 价值评分 + [UNTRUSTED DATA] 安全包裹 + 决策指导 (Prefer/Avoid) + 焦点序列检测 + 技能结晶引擎 + 工具调用采集。详见 CHANGELOG。
 
 > **v1.5.3 更新** — KnowledgeBridge 正式上线：fact_store 自动检索 + 行为指引注入。修复触发指令信息重复注入问题（narrative/emotion 不再重复出现在 background 层）。[查看完整更新记录 →](CHANGELOG.md#v153--20260713)
 
