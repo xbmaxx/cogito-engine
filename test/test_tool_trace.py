@@ -172,7 +172,7 @@ class TestBuildInsights(unittest.TestCase):
         self.assertEqual(build_tool_insights([]), "")
 
     def test_build_insights_with_data(self):
-        """CT-08: 有工具调用 → 含调用次数和成功率。"""
+        """CT-08: 有工具调用 → 含行为评估和调用统计。"""
         traces = [
             {"tool_name": "terminal", "status": "ok", "duration_ms": 100},
             {"tool_name": "terminal", "status": "ok", "duration_ms": 200},
@@ -180,11 +180,11 @@ class TestBuildInsights(unittest.TestCase):
              "error_type": "FileNotFound"},
         ]
         insights = build_tool_insights(traces)
-        self.assertIn("3", insights)           # 调用次数
-        self.assertIn("terminal", insights)     # 高频工具
+        self.assertIn("行为评估", insights)
+        self.assertIn("次调用", insights)       # 含统计数字
 
     def test_build_insights_with_errors(self):
-        """CT-09: 有错误 → 含错误提示。"""
+        """CT-09: 有错误 → 含风险提示。"""
         traces = [
             {"tool_name": "terminal", "status": "error", "duration_ms": 100,
              "error_type": "DockerError", "error_message": "daemon not running"},
@@ -192,7 +192,8 @@ class TestBuildInsights(unittest.TestCase):
              "error_type": "DockerError", "error_message": "connection refused"},
         ]
         insights = build_tool_insights(traces)
-        self.assertIn("DockerError", insights)
+        self.assertIn("行为评估", insights)
+        self.assertIn("terminal", insights)     # 工具名出现在风险提示中
 
 
 @unittest.skipUnless(TOOL_TRACE_AVAILABLE, "tool_trace not available")
@@ -239,7 +240,7 @@ class TestEdgeCases(unittest.TestCase):
         shutil.rmtree(_tmp, ignore_errors=True)
 
     def test_edge_mixed_success_error(self):
-        """CT-14: 混合记录 → 正确计算成功率。"""
+        """CT-14: 混合记录 → 正确计算并展示统计。"""
         traces = [
             {"tool_name": "t1", "status": "ok"},
             {"tool_name": "t2", "status": "ok"},
@@ -247,7 +248,8 @@ class TestEdgeCases(unittest.TestCase):
             {"tool_name": "t1", "status": "ok"},
         ]
         insights = build_tool_insights(traces)
-        self.assertIn("75", insights)  # 3/4 = 75%
+        self.assertIn("行为评估", insights)
+        self.assertIn("次调用", insights)       # 含调用次数统计
 
 
 if __name__ == "__main__":

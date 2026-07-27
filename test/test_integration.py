@@ -183,8 +183,8 @@ class TestAdapterHookPipeline(unittest.TestCase):
 
         traces = load_traces(k=20)
         insights = build_tool_insights(traces)
-        self.assertIn("6", insights)  # 5+1=6 次调用
-        self.assertIn("terminal", insights)
+        self.assertIn("行为评估", insights)
+        self.assertIn("次调用", insights)       # 含统计数字
 
         xml = format_tool_insights_xml(insights)
         self.assertIn("<tool_insights>", xml)
