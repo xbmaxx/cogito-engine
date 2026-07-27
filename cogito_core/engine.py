@@ -32,6 +32,8 @@ XML 输出格式严格遵循 spec：
 from __future__ import annotations
 
 import logging
+import os
+import json
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -312,11 +314,15 @@ class CogitoEngine:
         if not state.env_initialized:
             try:
                 from .env_sensor import get_snapshot
-                env_snap = get_snapshot(
-                    include_weather=self.include_weather,
-                    include_battery=self.include_battery,
-                    include_resources=self.include_resources,
-                ) or ""
+                # 持久化缓存：重启后 1 小时内复用上次快照，省 4-5s HTTP 请求
+                env_snap = _load_env_cache()
+                if env_snap is None:
+                    env_snap = get_snapshot(
+                        include_weather=self.include_weather,
+                        include_battery=self.include_battery,
+                        include_resources=self.include_resources,
+                    ) or ""
+                    _save_env_cache(env_snap)
                 state.env_initialized = True
             except Exception as exc:
                 logger.debug("环境传感器初始化失败: %s", exc)
@@ -1777,3 +1783,36 @@ class CogitoEngine:
             return list(set(text.split()[:10]))
         except Exception:
             return []
+
+
+# ── 环境快照持久化缓存 ──
+
+import time as _t_time
+
+
+def _env_cache_file() -> str:
+    return os.path.join(persistence.get_cogito_home(), "env_cache.json")
+
+_ENV_CACHE_TTL = 3600  # 1 小时
+
+
+def _load_env_cache():
+    try:
+        fp = _env_cache_file()
+        if not os.path.exists(fp):
+            return None
+        with open(fp, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if _t_time.time() - data.get("ts", 0) < _ENV_CACHE_TTL:
+            return data.get("snap", "")
+    except Exception:
+        pass
+    return None
+
+
+def _save_env_cache(snap: str) -> None:
+    try:
+        with open(_env_cache_file(), "w", encoding="utf-8") as f:
+            json.dump({"ts": _t_time.time(), "snap": snap}, f)
+    except Exception:
+        pass
