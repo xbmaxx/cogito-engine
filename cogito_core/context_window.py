@@ -345,7 +345,12 @@ class HierarchicalContextBuilder:
         """直接输出完整的 <consciousness> XML 字符串。
 
         供 _assemble_xml() 调用，替换当前的平铺拼接逻辑。
+
+        强制约束：输出控制在 ~600 字符以内（意识轮廓设计 §2.4 注入体积不变原则）。
+        容灾策略：超限时按 working → background 顺序逐步裁减。
         """
+        MAX_XML_CHARS = 600
+
         bands = self.build(inp)
         parts: List[str] = ["<consciousness>"]
 
@@ -359,4 +364,48 @@ class HierarchicalContextBuilder:
             parts.append(f"\n<background>\n{bands.background}\n</background>")
 
         parts.append("</consciousness>")
-        return "\n".join(parts)
+        xml = "\n".join(parts)
+
+        # ── 注入体积不变原则：永不超 600 字符 ──
+        if len(xml) <= MAX_XML_CHARS:
+            return xml
+
+        # 超限 → 容灾裁减（意识轮廓设计 §2.4）
+        # 优先级：保留 immediate 不动 → 裁 working → 裁 background
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Step 1: 裁减 working 层（去掉自主反思 → 去掉「还聊到」→ 去掉「上回聊过」）
+        if bands.working:
+            working_lines = bands.working.split("\n")
+            # 去掉 self_reflection 行
+            working_lines = [l for l in working_lines
+                           if not l.startswith("💭") and "反思" not in l]
+            # 去掉「还聊到」
+            working_lines = [l for l in working_lines if "还聊到" not in l]
+            # 去掉「上回聊过」
+            working_lines = [l for l in working_lines if "上回聊过" not in l]
+            bands.working = "\n".join(working_lines) if working_lines else ""
+
+        # Step 2: 重建并再测
+        parts = ["<consciousness>"]
+        if bands.immediate:
+            parts.append(f"<immediate>\n{bands.immediate}\n</immediate>")
+        if bands.working:
+            parts.append(f"\n<working>\n{bands.working}\n</working>")
+        if bands.background:
+            # 截断 background：只保留前 150 字符 + 截断标记
+            if len(bands.background) > 150:
+                bands.background = bands.background[:147] + "..."
+            parts.append(f"\n<background>\n{bands.background}\n</background>")
+        parts.append("</consciousness>")
+        xml = "\n".join(parts)
+
+        if len(xml) > MAX_XML_CHARS:
+            logger.warning(
+                "XML 注入超 600 字符 (%d chars) — 裁剪后仍超限，强制截断",
+                len(xml),
+            )
+            xml = xml[:MAX_XML_CHARS - 3] + "..."
+
+        return xml
