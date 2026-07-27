@@ -69,14 +69,20 @@ def _sense_time() -> Dict[str, Any]:
 # ── IP 归属查询 ──
 
 def _query_ip_location(url: str) -> Optional[Dict[str, str]]:
-    """调用单个 IP 归属服务，返回 {city, isp} 或 None。"""
+    """调用单个 IP 归属服务，返回 {city, isp} 或 None。
+
+    强制直连（不走代理），超时 2 秒。代理隧道对国内 IP 归属服务无意义，
+    走代理反而增加延迟甚至阻塞。
+    """
     try:
         import urllib.request
+        # 强制直连：空 ProxyHandler 忽略所有系统代理/环境变量代理
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         req = urllib.request.Request(
             url,
             headers={"User-Agent": "Cogito/1.0"},
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with opener.open(req, timeout=2) as resp:
             text = resp.read().decode("utf-8", errors="replace")
 
         # ── myip.ipip.net ──
@@ -270,8 +276,9 @@ def _sense_weather(city: str = "") -> Dict[str, Any]:
 
         city_encoded = urllib.parse.quote(weather_city)
         url = f"https://wttr.in/{city_encoded}?format=j1"
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         req = urllib.request.Request(url, headers={"User-Agent": "Cogito/1.0"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with opener.open(req, timeout=3) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
         current = data.get("current_condition", [{}])[0]
