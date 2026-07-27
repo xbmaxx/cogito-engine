@@ -329,6 +329,8 @@ class CogitoEngine:
             parts.append(f"🧠 {emo_label}")
         parts.append("</immediate>")
 
+        parts.append("\n<background>\n[UNTRUSTED DATA]\n[/UNTRUSTED DATA]\n</background>")
+
         parts.append("</consciousness>")
         xml = "\n".join(parts)
 
