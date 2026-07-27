@@ -388,7 +388,10 @@ def build_sequence_patterns(
 # ── XML 格式化 ──
 
 
-def format_patterns_for_xml(patterns: List[DetectedPattern]) -> str:
+def format_patterns_for_xml(
+    patterns: List[DetectedPattern],
+    max_patterns: int = 15,
+) -> str:
     """将序列模式列表格式化为 XML 片段。
 
     格式：
@@ -400,7 +403,8 @@ def format_patterns_for_xml(patterns: List[DetectedPattern]) -> str:
         </recurring_patterns>
 
     Args:
-        patterns: DetectedPattern 列表
+        patterns: DetectedPattern 列表（已按置信度降序排列）
+        max_patterns: 最多输出的 pattern 数量（默认 15，控制 token 膨胀）
 
     Returns:
         XML 字符串，空列表时返回 ""。
@@ -408,12 +412,14 @@ def format_patterns_for_xml(patterns: List[DetectedPattern]) -> str:
     if not patterns:
         return ""
 
-    avg_confidence = sum(p.confidence for p in patterns) / len(patterns)
+    # 截断：避免数十个低价值 pattern 撑爆 LLM context window
+    truncated = patterns[:max_patterns]
+    avg_confidence = sum(p.confidence for p in truncated) / len(truncated)
 
     parts: List[str] = []
     parts.append(f'<recurring_patterns importance="{avg_confidence:.2f}">')
 
-    for p in patterns:
+    for p in truncated:
         parts.append(f'  <pattern count="{p.count}">')
         if p.pattern_type == "focus_pair" and len(p.topics) >= 2:
             parts.append(f'    <focus_pair>{p.topics[0]}, {p.topics[1]}</focus_pair>')
@@ -427,6 +433,9 @@ def format_patterns_for_xml(patterns: List[DetectedPattern]) -> str:
             parts.append(f'    <focus_pair>{p.topics[0]} → {p.topics[1]}</focus_pair>')
         parts.append(f'    <signal>{p.description}</signal>')
         parts.append('  </pattern>')
+
+    if len(patterns) > max_patterns:
+        parts.append(f'  <!-- truncated {len(patterns) - max_patterns} more patterns -->')
 
     parts.append('</recurring_patterns>')
     return '\n'.join(parts)
