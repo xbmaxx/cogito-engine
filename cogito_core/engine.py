@@ -327,7 +327,7 @@ class CogitoEngine:
             try:
                 current_msg = {"role": "user", "content": msg_text}
                 sp_result = compute_self_perception(
-                    conversation_window=messages,
+                    conversation_window=messages[-50:],  # 只取最近 50 条，全量 600+ 条纯浪费
                     current_msg=current_msg,
                 )
             except Exception as exc:
