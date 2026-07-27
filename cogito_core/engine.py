@@ -247,10 +247,93 @@ class CogitoEngine:
         self._previous_emotion_label: Optional[str] = None  # 上一轮情绪标签
         self._emotion_trend_count: int = 0  # 趋势连续同向轮数
         self.knowledge_provider: Optional[Any] = None  # KnowledgeBridge 提供者（延迟设置）
+        # 跨会话性能缓存
+        self._load_perf_cache()
+
+    # ── 跨会话性能缓存 ──
+
+    def _load_perf_cache(self):
+        try:
+            fp = _perf_cache_file()
+            if not os.path.exists(fp):
+                return
+            with open(fp, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if _t_time.time() - data.get("ts", 0) > _PERF_CACHE_TTL:
+                return
+            if data.get("seq_xml"):
+                self._cached_seq_xml = data["seq_xml"]
+            if data.get("cross_session_patterns"):
+                self._cached_cross_session_patterns = data["cross_session_patterns"]
+            if data.get("location"):
+                self._cached_location = data["location"]
+        except Exception:
+            pass
+
+    def _save_perf_cache(self):
+        try:
+            data = {"ts": _t_time.time()}
+            if getattr(self, "_cached_seq_xml", None):
+                data["seq_xml"] = self._cached_seq_xml
+            if getattr(self, "_cached_cross_session_patterns", None):
+                data["cross_session_patterns"] = self._cached_cross_session_patterns
+            if getattr(self, "_cached_location", None):
+                data["location"] = self._cached_location
+            with open(_perf_cache_file(), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+        except Exception:
+            pass
+
 
     def set_knowledge_provider(self, provider) -> None:
         """设置 KnowledgeBridge 提供者。"""
         self.knowledge_provider = provider
+
+    def _fast_first_response(
+        self, msg_text: str, messages: List[Dict[str, Any]], state: EngineState
+    ) -> Tuple[str, EngineState]:
+        """首轮快速响应：<5s。只跑 tick + 关键词 + 情绪 + 最少 XML。"""
+        state.ticker.tick()
+
+        # 关键词提取
+        if msg_text:
+            try:
+                from .keywords import extract_keywords
+                kws = extract_keywords(msg_text)
+                if kws:
+                    state.focus_stack.update(kws, tick_counter=state.ticker.tick_counter, source="user")
+            except Exception:
+                pass
+
+        # 情绪分类（轻量）
+        emo_label = ""
+        try:
+            if self.include_emotion and self.emotion_registry:
+                from .text_emotion import quick_sentiment
+                er = quick_sentiment(msg_text)
+                if er:
+                    emo_label = er.get("label_cn", "")
+        except Exception:
+            pass
+
+        # 最小 XML：只含时间 + 情绪
+        now = datetime.now().astimezone()
+        now_local = now.strftime("%Y-%m-%d %H:%M")
+        now_weekday = now.strftime("%A")
+        now_period = get_period(now)
+
+        parts = ["<consciousness>"]
+        parts.append("<immediate>")
+        parts.append(f"🕐 {now_local} · {now_weekday} {now_period}")
+        if emo_label:
+            parts.append(f"🧠 {emo_label}")
+        parts.append("</immediate>")
+
+        parts.append("</consciousness>")
+        xml = "\n".join(parts)
+
+        self._session_messages = messages
+        return xml, state
 
     def process(
         self,
@@ -289,6 +372,10 @@ class CogitoEngine:
 
         is_first = state.is_first_message
         state.is_first_message = False
+
+        # ── 首轮快速通道：跳过所有重计算，只出 immediate + 最小上下文 ──
+        if is_first:
+            return self._fast_first_response(msg_text, messages, state)
 
         # ── 1. TICK 心跳 ──
         state.ticker.tick()
@@ -824,6 +911,7 @@ class CogitoEngine:
 
         result = all_patterns[:3]
         self._cached_cross_session_patterns = result
+        self._save_perf_cache()
         return result
 
     # ── 信息设计：触发指令系统 ──
@@ -1173,6 +1261,7 @@ class CogitoEngine:
             # 会话内缓存：IP 归属在同一次对话中不变
             if not hasattr(self, '_cached_location'):
                 self._cached_location = get_location()
+                self._save_perf_cache()
             loc_data = self._cached_location
         except Exception:
             pass
@@ -1816,3 +1905,12 @@ def _save_env_cache(snap: str) -> None:
             json.dump({"ts": _t_time.time(), "snap": snap}, f)
     except Exception:
         pass
+
+
+# ── 跨会话性能缓存 ──
+
+_PERF_CACHE_TTL = 3600
+
+def _perf_cache_file():
+    return os.path.join(persistence.get_cogito_home(), "perf_cache.json")
+
