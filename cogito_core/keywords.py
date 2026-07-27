@@ -10,6 +10,15 @@ try:
     _HAS_JIEBA = True
 except ImportError:
     _HAS_JIEBA = False
+    import logging as _logging
+    _LOGGER = _logging.getLogger(__name__)
+    if not getattr(_LOGGER, "_jieba_warned", False):
+        setattr(_LOGGER, "_jieba_warned", True)
+        _LOGGER.warning(
+            "jieba 未安装，中文关键词提取降级为 ngram。"
+            "运行 install.py 或手动 pip install jieba 可修复。"
+            "碎片化焦点词会影响结晶引擎、话题检测和 recurring_patterns 质量。"
+        )
 
 STOP_WORDS_CN = {
     '的', '了', '是', '在', '我', '你', '他', '她', '它',

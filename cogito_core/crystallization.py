@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from .persistence import get_cogito_home
+from .focus_sequence import _is_garbage_keyword
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,9 @@ def detect_candidates(
         for t in n.get("focus_topics", []):
             t_str = str(t).strip()
             if not t_str or len(t_str) <= 1:
+                continue
+            # 过滤 ngram 碎片：无 jieba 时产生的字符碎片（如 "已重启，" "看下新"）
+            if _is_garbage_keyword(t_str):
                 continue
             topic_data[t_str]["alphas"].append(alpha)
             if sid:
@@ -437,3 +441,150 @@ def _xml_escape(text: str) -> str:
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace('"', "&quot;"))
+
+
+# ── 工具模式→结晶 桥接 ──
+
+
+def detect_tool_patterns(
+    traces: List[Dict[str, Any]],
+    min_failure_rate: float = 0.30,
+    min_count: int = 5,
+    min_fallback_count: int = 2,
+) -> List[CrystallizationCandidate]:
+    """从工具调用记录检测可结晶的工具使用模式。
+
+    检测三类模式，输出 CrystallizationCandidate 供结晶管线使用：
+
+    1. **高失败率工具**：某工具失败率 > min_failure_rate 且调用 ≥ min_count
+       → 候选: topic="skill_manage", pattern="失败率52.9%", approach="先 skills_list 再调用"
+
+    2. **稳定降级链**：工具 A 失败后自动切工具 B 成功 ≥min_fallback_count 次
+       → 候选: topic="skill_manage→skills_list", pattern="降级已稳定2次"
+
+    3. **全局异常**：当前会话成功率偏离全局基线 >15%
+       → 候选: topic="工具链波动", pattern="偏离基线X%", approach="策略切换建议"
+
+    Args:
+        traces: 工具调用记录列表（至少含 tool_name、status 字段）
+        min_failure_rate: 失败率阈值（默认 0.30）
+        min_count: 最低调用次数才有统计意义（默认 5）
+        min_fallback_count: 降级链最低出现次数（默认 2）
+
+    Returns:
+        CrystallizationCandidate 列表，空列表时表示无模式
+    """
+    if not traces:
+        return []
+
+    total = len(traces)
+
+    # ── 1. 工具统计 ──
+    tool_total: Dict[str, int] = {}
+    tool_fail: Dict[str, int] = {}
+    for t in traces:
+        name = t.get("tool_name", "")
+        if not name:
+            continue
+        tool_total[name] = tool_total.get(name, 0) + 1
+        if t.get("status") != "ok":
+            tool_fail[name] = tool_fail.get(name, 0) + 1
+
+    candidates: List[CrystallizationCandidate] = []
+
+    # ── 2. 高失败率工具 ──
+    for tool_name, total_calls in tool_total.items():
+        if total_calls < min_count:
+            continue
+        failures = tool_fail.get(tool_name, 0)
+        failure_rate = failures / total_calls
+        if failure_rate < min_failure_rate:
+            continue
+
+        approach_map = {
+            "skill_manage": "先调用 skills_list 确认 skill 存在，再执行 skill_manage。或直接用 patch 编辑文件替代",
+            "memory": "先读取 memory 确认容量（memory_char_limit），防止超限写入失败",
+            "write_file": "确认目标目录存在且可写；大文件写入分步进行，每步验证",
+            "execute_code": "代码逻辑问题导致执行失败；先在终端验证语法，再用 execute_code",
+            "patch": "old_string 不唯一导致匹配失败；增加上下文或使用 replace_all=true",
+            "skill_view": "skill 名可能拼写错误；先 skills_list 确认正确名称",
+            "read_file": "确认路径有效性后再读取；大文件用 offset/limit 分批",
+        }
+        approach = approach_map.get(
+            tool_name,
+            f"{tool_name} 失败率 {failure_rate:.0%}——优先用更稳定的替代方案",
+        )
+
+        candidates.append(CrystallizationCandidate(
+            topic=tool_name,
+            sessions=[],
+            avg_alpha=min(0.75, 0.4 + failure_rate * 0.7),
+            evidence_count=total_calls,
+            pattern=f"工具 {tool_name} 失败率 {failure_rate:.0%}（{failures}/{total_calls}）",
+            suggested_approach=approach,
+        ))
+
+    # ── 3. 降级链: A失败→B成功 ──
+    fallback_pairs: Dict[tuple, int] = {}
+    prev_status = "ok"
+    prev_tool = ""
+    for t in traces:
+        name = t.get("tool_name", "")
+        if not name:
+            continue
+        status = t.get("status", "ok")
+        if prev_status != "ok" and status == "ok" and prev_tool and prev_tool != name:
+            key = (prev_tool, name)
+            fallback_pairs[key] = fallback_pairs.get(key, 0) + 1
+        prev_status = status
+        prev_tool = name
+
+    for (src, dst), cnt in fallback_pairs.items():
+        if cnt < min_fallback_count:
+            continue
+
+        topic = f"{src}→{dst}"
+        candidates.append(CrystallizationCandidate(
+            topic=topic,
+            sessions=[],
+            avg_alpha=min(0.70, 0.45 + cnt * 0.10),
+            evidence_count=cnt,
+            pattern=f"工具 {src} 失败后自动降级到 {dst}——已稳定出现 {cnt} 次",
+            suggested_approach=f"{src} 调用失败时，优先尝试 {dst} 作为降级方案，避免重复失败",
+        ))
+
+    # ── 4. 全局异常 ──
+    ok_count = sum(1 for t in traces if t.get("status") == "ok")
+    session_rate = ok_count / total if total > 0 else 1.0
+
+    try:
+        from .tool_trace import load_traces
+        all_traces = load_traces(k=1000)
+        all_ok = sum(1 for t in all_traces if t.get("status") == "ok")
+        all_total = len(all_traces)
+        baseline_rate = all_ok / all_total if all_total > 0 else 1.0
+    except Exception:
+        baseline_rate = 0.88  # 默认基线
+
+    deviation = abs(session_rate - baseline_rate)
+    if deviation > 0.15 and total >= 10:
+        direction = "上升" if session_rate < baseline_rate else "下降"
+        candidates.append(CrystallizationCandidate(
+            topic="工具链波动",
+            sessions=[],
+            avg_alpha=0.50,
+            evidence_count=total,
+            pattern=(
+                f"当前会话成功率 {session_rate:.0%}，偏离全局基线 {baseline_rate:.0%} "
+                f"（{direction}{deviation:.0%}）"
+            ),
+            suggested_approach=(
+                "全局成功率偏离基线——建议切换策略："
+                "减少危险工具使用（如 patch/skill_manage），"
+                "优先用稳定工具（read_file/search_files/terminal）"
+            ) if session_rate < baseline_rate else "",
+        ))
+
+    # 按置信度降序
+    candidates.sort(key=lambda c: c.confidence, reverse=True)
+    return candidates

@@ -99,6 +99,9 @@ class NarrativeStore:
         session_id: str = "",
         pending: bool = False,
         retry_count: int = 0,
+        alpha: Optional[float] = None,
+        key_signals: Optional[Dict[str, float]] = None,
+        guidance: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """追加一条叙事条目。
 
@@ -111,6 +114,9 @@ class NarrativeStore:
             session_id: 会话 ID
             pending: 是否等待 LLM 完整摘要（deferred reflection）
             retry_count: 已重试次数（仅 pending=True 时有效）
+            alpha: α 评分 [0,1]，支撑技能结晶和记忆重要性区分（v1.6.1+）
+            key_signals: α 因子明细，如 {"emotion_intensity": 0.30, ...}
+            guidance: 决策指导 {prefer: [...], avoid: [...]}
 
         Returns:
             新追加的叙事条目 dict。
@@ -127,6 +133,12 @@ class NarrativeStore:
         }
         if pending:
             entry["retry_count"] = retry_count
+        if alpha is not None:
+            entry["alpha"] = round(alpha, 4)
+        if key_signals:
+            entry["key_signals"] = {k: round(v, 4) for k, v in key_signals.items()}
+        if guidance:
+            entry["guidance"] = guidance
 
         nf = _narrative_file()
         try:

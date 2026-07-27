@@ -32,6 +32,10 @@ def _is_garbage_keyword(t: str) -> bool:
         return True
     if not any(c.isalnum() for c in t):
         return True
+    # 含中文标点的碎片（ngram 切在标点前后）："已重启，" "，看下" "启，看"
+    import re
+    if re.search(r'[，。；！？、：""''【】（）]', t):
+        return True
     return False
 
 
@@ -226,7 +230,7 @@ def detect_emotion_correlations(
         sid = n.get("session_id", "")
         for t in n.get("focus_topics", []):
             t_str = str(t).strip()
-            if t_str and len(t_str) > 1:
+            if not _is_garbage_keyword(t_str):
                 topic_emotions[t_str].append(sentiment)
                 topic_sessions[t_str].add(sid)
 
@@ -297,7 +301,7 @@ def detect_path_jumps(
         # 更新最后出现的 session 的话题集
         for t in n.get("focus_topics", []):
             t_str = str(t).strip()
-            if t_str and len(t_str) > 1:
+            if not _is_garbage_keyword(t_str):
                 ordered_sessions[-1]["focus_topics"].add(t_str)
 
     if len(ordered_sessions) < 2:

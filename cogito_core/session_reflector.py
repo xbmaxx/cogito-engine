@@ -109,16 +109,20 @@ class SessionReflector:
         focus_topics: List[str],
         llm_fn: Callable[[str], str],
         max_keyframes: int = 15,
+        alpha: Optional[float] = None,
+        key_signals: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
         """用 LLM 生成结构化会话摘要（deferred reflection）。
 
-        由 engine.process() 在下个 session 首次消息时调用。
+        由 engine.end_session() 调用。
 
         Args:
             keyframe_texts: 关键帧文本列表（"[role]: content" 格式）
             focus_topics: 焦点话题关键词
             llm_fn: LLM 调用函数，签名 (prompt: str) -> str
             max_keyframes: 送入 LLM 的关键帧上限
+            alpha: α 评分（由规则引擎预计算，作为上下文喂给 LLM）
+            key_signals: α 因子明细
 
         Returns:
             {
@@ -126,13 +130,17 @@ class SessionReflector:
                 "insights": str,       # 洞察
                 "unresolved": str,     # 未解决问题
                 "emotion_summary": str,# 情感总结
+                "guidance": {          # 决策指导（v1.6.1+）
+                    "prefer": [...],
+                    "avoid": [...]
+                }
             }
         """
         # 截断关键帧
         frames = keyframe_texts[-max_keyframes:]
 
-        # 构建 prompt
-        prompt = self._build_reflection_prompt(frames, focus_topics)
+        # 构建 prompt（含 α 上下文）
+        prompt = self._build_reflection_prompt(frames, focus_topics, alpha=alpha, key_signals=key_signals)
 
         # 调用 LLM
         try:
@@ -148,6 +156,8 @@ class SessionReflector:
         self,
         keyframe_texts: List[str],
         focus_topics: List[str],
+        alpha: Optional[float] = None,
+        key_signals: Optional[Dict[str, float]] = None,
     ) -> str:
         """构建 reflection prompt —— 紧凑格式，最小化 token 消耗。"""
         frames_block = "\n".join(
@@ -155,22 +165,35 @@ class SessionReflector:
         )
         topics_str = ", ".join(focus_topics) if focus_topics else "无"
 
+        # α 评分上下文行（仅在有值时注入，token 增量 ~60）
+        alpha_context = ""
+        if alpha is not None:
+            alpha_context = (
+                f"\n本轮 α 评分: {alpha:.2f}\n"
+                f"信号因子: 情绪强度{key_signals.get('emotion_intensity', 0):.2f}, "
+                f"焦点深度{key_signals.get('focus_depth', 0):.2f}, "
+                f"话题频次{key_signals.get('topic_frequency', 0):.2f}, "
+                f"用户参与度{key_signals.get('user_engagement', 0):.2f}\n"
+            ) if key_signals else f"\n本轮 α 评分: {alpha:.2f}\n"
+
         return (
             "你是会话反射器。阅读以下对话关键帧，生成结构化 JSON 摘要。\n"
             "\n"
             "对话关键帧：\n"
             f"{frames_block}\n"
             "\n"
-            f"焦点话题：{topics_str}\n"
+            f"焦点话题：{topics_str}"
+            f"{alpha_context}\n"
             "\n"
             "只返回一个 JSON 对象（无代码块包裹，无其他文字）：\n"
-            '{"summary": "...", "insights": "...", "unresolved": "...", "emotion_summary": "..."}\n'
+            '{"summary": "...", "insights": "...", "unresolved": "...", "emotion_summary": "...", "guidance": {"prefer": ["..."], "avoid": ["..."]}}\n'
             "\n"
             "字段说明：\n"
             "- summary: 100-200 字叙事总结，说明讨论了什么、做了什么决策\n"
             "- insights: 一条关键洞察或发现，无则填\"无\"\n"
             "- unresolved: 最需要跨会话延续的未决问题，无则填\"无\"\n"
-            "- emotion_summary: 情感基调（正面/负面/混合/中性）"
+            "- emotion_summary: 情感基调（正面/负面/混合/中性）\n"
+            "- guidance: 决策指导，从对话中提炼用户偏好（prefer）和应回避的做法（avoid），无则填空数组"
         )
 
     def _parse_reflection(self, raw: str) -> Dict[str, Any]:
@@ -193,6 +216,7 @@ class SessionReflector:
             "insights": str(data.get("insights", "")),
             "unresolved": str(data.get("unresolved", "")),
             "emotion_summary": str(data.get("emotion_summary", "")),
+            "guidance": _coerce_guidance(data.get("guidance")),
         }
 
     def _fallback_reflection(
@@ -282,3 +306,29 @@ class SessionReflector:
         rf_file = _reflections_file()
         if rf_file.exists():
             rf_file.unlink()
+
+
+# ── 辅助函数 ──
+
+
+def _coerce_guidance(raw: Any) -> Dict[str, List[str]]:
+    """安全地将 LLM 输出的 guidance 转为 {prefer: [...], avoid: [...]} 结构。
+
+    容忍格式畸变：字符串按行分拆，None/非 dict 返回空。
+    """
+    empty: Dict[str, List[str]] = {"prefer": [], "avoid": []}
+    if raw is None:
+        return empty
+    if isinstance(raw, str):
+        return empty
+    if not isinstance(raw, dict):
+        return empty
+    prefer = raw.get("prefer", [])
+    avoid = raw.get("avoid", [])
+    if isinstance(prefer, str):
+        prefer = [prefer]
+    if isinstance(avoid, str):
+        avoid = [avoid]
+    prefer_list = [str(x).strip() for x in prefer if x] if isinstance(prefer, list) else []
+    avoid_list = [str(x).strip() for x in avoid if x] if isinstance(avoid, list) else []
+    return {"prefer": prefer_list[:3], "avoid": avoid_list[:3]}

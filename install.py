@@ -425,49 +425,68 @@ def dry_run_report(platforms: List[str]) -> None:
 
 def _install_jieba_to_hermes_venv() -> None:
     """确保 jieba 安装到 Hermes 网关的 venv 中。"""
-    # 多路径探测，覆盖不同 Hermes 版本的 venv 位置
+    home = Path.home()
+
+    # 显式候选：覆盖最可能的位置（~/.hermes-web-ui/ 和 ~/.hermes/ 下都有）
     candidates = [
-        Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "pip",
-        Path.home() / ".hermes" / "venv" / "bin" / "pip",
-        Path.home() / ".hermes" / "hermes-web-ui" / "desktop-runtime" / "hermes" / "0.19.0" / "mac-arm64" / "python" / "bin" / "pip3",
+        home / ".hermes" / "hermes-agent" / "venv" / "bin" / "pip",
+        home / ".hermes" / "venv" / "bin" / "pip",
     ]
-    # 额外：递归搜索 ~/.hermes/ 下所有 pip/pip3
-    hermes_dir = Path.home() / ".hermes"
-    if hermes_dir.exists():
+
+    # 递归搜索 ~/.hermes-web-ui/ 和 ~/.hermes/ 下所有 python3 和 pip
+    for base in [home / ".hermes-web-ui", home / ".hermes"]:
+        if not base.exists():
+            continue
         try:
-            for p in hermes_dir.rglob("pip"):
-                if p.is_file() and "venv" in str(p) or "python" in str(p.parent):
-                    candidates.append(p)
-            for p in hermes_dir.rglob("pip3"):
-                if p.is_file() and ("venv" in str(p) or "python" in str(p.parent)):
-                    candidates.append(p)
+            # python3 -m pip install (代替不存在的 pip3 命令)
+            for py in base.rglob("python3"):
+                if py.is_file() and "bin" in py.parent.name:
+                    candidates.append(py)  # 后续用 python3 -m pip 安装
+            # pip / pip3
+            for pip_name in ("pip3", "pip"):
+                for p in base.rglob(pip_name):
+                    if p.is_file() and ("venv" in str(p) or "python" in str(p.parent) or "bin" in str(p.parent)):
+                        candidates.append(p)
         except Exception:
             pass
 
     installed = False
-    for venv_pip in candidates:
-        if not venv_pip.exists():
+    for venv_tool in candidates:
+        if not venv_tool.exists():
             continue
         try:
+            # 如果是 python3 二进制，用 python3 -m pip
+            if venv_tool.name == "python3":
+                cmd = [str(venv_tool), "-m", "pip", "install", "jieba", "-q"]
+            else:
+                cmd = [str(venv_tool), "install", "jieba", "-q"]
             result = subprocess.run(
-                [str(venv_pip), "install", "jieba", "-q"],
-                check=False, timeout=60, capture_output=True,
+                cmd, check=False, timeout=60, capture_output=True,
             )
             if result.returncode == 0:
                 installed = True
+                print(f"  ✓ jieba installed via {venv_tool}")
                 break
         except Exception:
             continue
 
     if not installed:
-        # 最后兜底：用系统 pip 装（Hermes venv 可能继承系统 site-packages）
-        try:
-            subprocess.run(
-                ["pip3", "install", "jieba", "-q"],
-                check=False, timeout=60,
-            )
-        except Exception:
-            pass
+        # 最后兜底：用系统 pip 装
+        for sys_pip in ["pip3", "pip"]:
+            try:
+                result = subprocess.run(
+                    [sys_pip, "install", "jieba", "-q"],
+                    check=False, timeout=60, capture_output=True,
+                )
+                if result.returncode == 0:
+                    installed = True
+                    print(f"  ✓ jieba installed via system {sys_pip}")
+                    break
+            except Exception:
+                continue
+
+    if not installed:
+        print("  ⚠ jieba 未能自动安装，中文分词将降级为 ngram（不影响核心功能）")
 
 
 def _migrate_legacy_data() -> None:
@@ -490,6 +509,126 @@ def _migrate_legacy_data() -> None:
             pass
 
 
+def _clean_narratives() -> None:
+    """清理 narrative.jsonl 中的 ngram 碎片 focus_topics（无 jieba 时的产物）。
+
+    策略：
+    1. 用 jieba 从 summary 重新提取焦点词，替换旧 ngram 碎片
+    2. 写入 narrative_version: "1.6.2" 标记已清理
+    3. 已清理条目跳过（幂等）
+    4. 创建 .backup 安全备份
+
+    仅当 jieba 可用时执行。
+    """
+    try:
+        import jieba
+    except ImportError:
+        print("  ⚠ jieba not available — skip narrative cleanup")
+        return
+
+    import re
+    import tempfile
+
+    memory_dir = Path.home() / ".hermes" / "memory"
+    nf = memory_dir / "narrative.jsonl"
+    if not nf.exists():
+        return
+
+    lines = nf.read_text(encoding="utf-8").strip().split("\n")
+    if not lines:
+        return
+
+    # 创建备份
+    backup = nf.with_suffix(".jsonl.backup")
+    try:
+        shutil.copy2(nf, backup)
+    except Exception:
+        pass
+
+    cleaned = 0
+    dirty = 0
+    current_version = "1.6.2"
+    _punctuation_re = re.compile(r'[，。；！？、：""''【】（）,]')
+
+    new_lines = []
+    for line in lines:
+        if not line.strip():
+            new_lines.append(line)
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            new_lines.append(line)
+            continue
+
+        # 已清理过 → 跳过
+        if entry.get("narrative_version") == current_version:
+            new_lines.append(line)
+            continue
+
+        focus_topics = entry.get("focus_topics", [])
+        summary = entry.get("summary", "")
+
+        # 检测是否有 ngram 碎片：含中文标点、或全是 3 字以下中文片段
+        has_fragments = any(
+            _punctuation_re.search(str(t))
+            for t in focus_topics
+        )
+        # 也检查是否有异常多的短词（> 50% 的 topic 是 3 字以内中文）
+        if not has_fragments and focus_topics:
+            short_cn = sum(
+                1 for t in focus_topics
+                if re.match(r'^[\u4e00-\u9fff]{1,3}$', str(t).strip())
+            )
+            if short_cn > len(focus_topics) * 0.5:
+                has_fragments = True
+
+        if not has_fragments and summary:
+            # 没有明显碎片但有 summary，仍然用 jieba 重新提取，提升质量
+            pass  # fall through to re-extraction
+        elif not has_fragments:
+            # 没有 summary 也没有碎片 → 标记版本后跳过
+            entry["narrative_version"] = current_version
+            new_lines.append(json.dumps(entry, ensure_ascii=False))
+            continue
+
+        dirty += 1
+
+        # 用 jieba 从 summary 重新提取 focus_topics
+        if summary:
+            words = jieba.lcut(summary)
+            # 从全文中去重提取有效词
+            seen = set()
+            clean_topics = []
+            for w in words:
+                w = w.strip()
+                if (len(w) >= 2
+                        and not _punctuation_re.search(w)
+                        and w not in seen
+                        and re.search(r'[\u4e00-\u9fffa-zA-Z]', w)):
+                    seen.add(w)
+                    clean_topics.append(w)
+            entry["focus_topics"] = clean_topics[:10]
+
+        entry["narrative_version"] = current_version
+        new_lines.append(json.dumps(entry, ensure_ascii=False))
+        cleaned += 1
+
+    if dirty == 0:
+        print(f"  ✓ narratives already clean ({len(lines)} entries)")
+        return
+
+    # 写入清理后的文件
+    try:
+        content = "\n".join(new_lines) + "\n"
+        nf.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        print(f"  ✗ failed to write cleaned narratives: {exc}")
+        return
+
+    print(f"  ✓ cleaned {cleaned}/{len(lines)} narrative entries (backup: {backup.name})")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Cogito Engine – universal AI-agent installer (macOS / Linux / Windows)",
@@ -502,6 +641,8 @@ def main() -> None:
                         help="Hermes profile name (auto-detect: HERMES_PROFILE env, then single profile, then global)")
     parser.add_argument("--list-profiles", action="store_true", help="List available Hermes profiles and exit")
     parser.add_argument("--dry-run", action="store_true", help="Detect platforms and print report; no changes")
+    parser.add_argument("--clean-narratives", action="store_true",
+                        help="Clean ngram garbage from narrative focus_topics (requires jieba)")
 
     args = parser.parse_args()
 
@@ -528,12 +669,16 @@ def main() -> None:
         install_dependencies()
         _install_jieba_to_hermes_venv()
         _migrate_legacy_data()
+        if args.clean_narratives:
+            _clean_narratives()
         ok = install_for_platform(args.platform, update=args.update, hermes_profile=args.hermes_profile)
     else:
         bootstrap_engine()
         install_dependencies()
         _install_jieba_to_hermes_venv()
         _migrate_legacy_data()
+        if args.clean_narratives:
+            _clean_narratives()
         ok = True
         for p in platforms:
             if not install_for_platform(p, update=args.update, hermes_profile=args.hermes_profile):

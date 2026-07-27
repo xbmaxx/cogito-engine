@@ -54,7 +54,7 @@ from .focus_sequence import (
 )
 from .crystallization import (
     CrystallizedSkill,
-    detect_candidates, crystallize, load_skills,
+    detect_candidates, detect_tool_patterns, crystallize, load_skills,
     match_context, inject_skills,
 )
 from .tool_trace import (
@@ -202,7 +202,7 @@ class CogitoEngine:
         include_resources: bool = True,
         include_emotion: bool = True,
         include_narrative: bool = True,
-        include_tool_insights: bool = False,
+        include_tool_insights: bool = True,
         reflection_llm: Optional[Callable[[str], str]] = None,
         emotion_model: str = "affect_mapper",
     ) -> None:
@@ -241,6 +241,7 @@ class CogitoEngine:
         self._profile: str = "default"             # 当前 profile 标签
         # MemOS Phase 4: 工具调用洞察
         self._cached_tool_insights: str = ""       # 缓存最新工具调用洞察文本
+        self._narrative_written_sessions: set = set()  # 已写入叙事 session_id，防重复写入
         self._previous_emotion_label: Optional[str] = None  # 上一轮情绪标签
         self._emotion_trend_count: int = 0  # 趋势连续同向轮数
         self.knowledge_provider: Optional[Any] = None  # KnowledgeBridge 提供者（延迟设置）
@@ -1422,6 +1423,10 @@ class CogitoEngine:
         narrative_insights = ""
         narrative_unresolved = ""
         narrative_emotion = ""
+        narrative_guidance = None
+        # α 评分上下文（由 _compute_alpha 在 process() 中预计算）
+        alpha_val = self._alpha_result.alpha if self._alpha_result else None
+        alpha_signals = self._alpha_result.weighted if self._alpha_result else None
 
         if self._reflection_llm and reflection_entry:
             keyframe_texts = reflection_entry.get("keyframe_texts", [])
@@ -1431,6 +1436,8 @@ class CogitoEngine:
                         keyframe_texts=keyframe_texts,
                         focus_topics=unique,
                         llm_fn=self._reflection_llm,
+                        alpha=alpha_val,
+                        key_signals=alpha_signals,
                     )
                     # 验证 LLM 输出：摘要非空且非模板复读
                     llm_summary = llm_result.get("summary", "").strip()
@@ -1439,6 +1446,7 @@ class CogitoEngine:
                         narrative_insights = llm_result.get("insights", "")
                         narrative_unresolved = llm_result.get("unresolved", "")
                         narrative_emotion = llm_result.get("emotion_summary", "")
+                        narrative_guidance = llm_result.get("guidance")
                         narrative_pending = False
                         logger.debug("内联反射成功: session=%s", state.session_id)
                     else:
@@ -1454,6 +1462,8 @@ class CogitoEngine:
                                 focus_topics=unique,
                                 llm_fn=self._reflection_llm,
                                 max_keyframes=half,
+                                alpha=alpha_val,
+                                key_signals=alpha_signals,
                             )
                             llm_summary = llm_result.get("summary", "").strip()
                             if llm_summary and llm_summary != narrative_summary.strip():
@@ -1461,6 +1471,7 @@ class CogitoEngine:
                                 narrative_insights = llm_result.get("insights", "")
                                 narrative_unresolved = llm_result.get("unresolved", "")
                                 narrative_emotion = llm_result.get("emotion_summary", "")
+                                narrative_guidance = llm_result.get("guidance")
                                 narrative_pending = False
                                 logger.debug("内联反射重试成功: session=%s", state.session_id)
                             else:
@@ -1473,6 +1484,14 @@ class CogitoEngine:
                 except Exception as exc:
                     logger.warning("内联反射 LLM 调用失败，保留 pending: %s", exc)
 
+        # ── 去重检查：同一 session 只写入一次叙事记忆 ──
+        # Hermes 的 on_session_end 在每轮对话结束时都触发，而非仅在会话关闭时。
+        # 同一 session 内会被多次调用，导致 narrative 重复写入 5-17 次。
+        sid = state.session_id
+        if sid and sid in self._narrative_written_sessions:
+            logger.debug("叙事记忆已写入，跳过重复: session=%s", sid)
+            return
+
         try:
             self.narrative_store.append(
                 summary=narrative_summary,
@@ -1483,7 +1502,11 @@ class CogitoEngine:
                 session_id=state.session_id,
                 pending=narrative_pending,
                 retry_count=0,
+                alpha=alpha_val,
+                key_signals=alpha_signals,
+                guidance=narrative_guidance,
             )
+            self._narrative_written_sessions.add(state.session_id)
         except Exception as exc:
             logger.error("保存叙事记忆失败: %s", exc)
 
@@ -1506,9 +1529,24 @@ class CogitoEngine:
 
         # ── MemOS Phase 3: 技能结晶检测 + 落库 ──
         try:
+            # 3a. 叙事模式 → 候选
             narratives = persistence.load_narrative_since(days=30)
-            candidates = detect_candidates(narratives, min_alpha=0.7, min_count=3)
-            for cand in candidates:
+            all_candidates = detect_candidates(narratives, min_alpha=0.4, min_count=2)
+
+            # 3b. 工具模式 → 候选（v1.6.2: tool_trace 接入结晶引擎）
+            try:
+                traces = load_traces(k=500)
+                tool_candidates = detect_tool_patterns(traces)
+                if tool_candidates:
+                    logger.debug(
+                        "工具模式检测: %d 个工具模式候选",
+                        len(tool_candidates),
+                    )
+                    all_candidates.extend(tool_candidates)
+            except Exception as exc:
+                logger.debug("工具模式检测跳过: %s", exc)
+
+            for cand in all_candidates:
                 crystallize(cand, profile=self._profile)
             # 缓存已结晶的技能
             all_skills = load_skills(profile=self._profile, min_confidence=0.5)

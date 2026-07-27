@@ -464,6 +464,8 @@ class HermesAdapter:
         Hermes 签名：cb(tool_name, args, result, task_id, session_id,
                         tool_call_id, turn_id, duration_ms, status, ...)
         """
+        logger.info("post_tool_call triggered: tool=%s status=%s", 
+                     kwargs.get("tool_name", "?"), kwargs.get("status", "?"))
         try:
             from cogito_core.tool_trace import collect_tool_call
 
@@ -485,7 +487,7 @@ class HermesAdapter:
                 session_id=sid,
             )
         except Exception as exc:
-            logger.debug("工具调用采集失败（不影响主流程）: %s", exc)
+            logger.warning("工具调用采集失败: %s", exc)
 
     def _init_knowledge_bridge(self, ctx: Any) -> None:
         """KnowledgeBridge 初始化：扫描本地知识源并决策。

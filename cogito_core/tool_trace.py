@@ -238,46 +238,140 @@ def analyze_error_patterns(
 def build_tool_insights(
     traces: List[Dict[str, Any]],
 ) -> str:
-    """从工具调用记录生成自然语言洞察。
+    """从工具调用记录生成可指导 LLM 决策的行为评估。
+
+    不做的事：告诉 LLM "你调了 25 次 terminal"——LLM 刚做完这些调用。
+    要做的事：转化为 LLM 不知道的信息——
+    1. 行为画像：当前任务的工具使用特征（探索型/执行型/修复型）
+    2. 模式检测：稳定降级路径、反常波动、效率问题
+    3. 决策指引：该加强、该回避、该保留的行为
 
     Args:
-        traces: 工具调用记录列表
+        traces: 工具调用记录列表（按时间顺序）
 
     Returns:
-        洞察文本，空 traces 时返回 ""。
+        紧凑行为评估文本，空 traces 时返回 ""。
+        Token 控制在 ~80-150，不膨胀 context。
     """
     if not traces:
         return ""
 
     total = len(traces)
     ok_count = sum(1 for t in traces if t.get("status") == "ok")
-    err_count = total - ok_count
     success_rate = (ok_count / total * 100) if total > 0 else 0
 
-    # 统计工具调用频次
+    # ── 1. 工具使用画像 ──
     tool_counts: Counter = Counter()
+    err_tool_counts: Counter = Counter()
+    tool_sequence: List[str] = []
     for t in traces:
         name = t.get("tool_name", "unknown")
         if name:
             tool_counts[name] += 1
+            tool_sequence.append(name)
+            if t.get("status") != "ok":
+                err_tool_counts[name] += 1
 
-    top_tools = tool_counts.most_common(3)
+    # 画像分类
+    exploration_tools = {"read_file", "search_files", "skill_view", "vision_analyze"}
+    execution_tools = {"terminal", "patch", "write_file", "execute_code", "process"}
+    modification_tools = {"patch", "write_file", "skill_manage"}
 
+    expl_count = sum(tool_counts.get(t, 0) for t in exploration_tools)
+    exec_count = sum(tool_counts.get(t, 0) for t in execution_tools)
+    mod_count = sum(tool_counts.get(t, 0) for t in modification_tools)
+
+    # 画像标签
+    if total >= 10 and expl_count / total >= 0.5:
+        profile = "探索型——正在大范围了解项目结构"
+    elif total >= 10 and mod_count / total >= 0.4:
+        profile = "修整型——大量代码编辑和文件变更"
+    else:
+        profile = "执行型——主要在运行命令和做具体操作"
+
+    # ── 2. 模式检测 ──
     parts: List[str] = []
-    parts.append(f"当前 session 调用了 {total} 次工具，成功率 {success_rate:.0f}%")
 
-    if top_tools:
-        tools_desc = "、".join(f"{n}({c}次)" for n, c in top_tools)
-        parts.append(f"高频工具：{tools_desc}")
+    # 2a. 降级链: 工具A失败→工具B成功
+    fallback_chains: Dict[str, Counter] = defaultdict(Counter)
+    prev_status = None
+    prev_tool = ""
+    for t in traces:
+        name = t.get("tool_name", "")
+        if not name:
+            continue
+        status = t.get("status", "ok")
+        if prev_status == "error" and status == "ok" and prev_tool != name:
+            fallback_chains[prev_tool][name] += 1
+        prev_status = status
+        prev_tool = name
 
-    if err_count > 0:
-        # 错误模式
-        patterns = analyze_error_patterns(traces, min_count=1)
-        if patterns:
-            top_err = patterns[0]
-            parts.append(f"最常见错误：{top_err.error_type}（{top_err.count}次）")
+    fallback_lines: List[str] = []
+    for src_tool, fallbacks in fallback_chains.items():
+        for dst_tool, cnt in fallbacks.items():
+            if cnt >= 2:
+                fallback_lines.append(f"{src_tool}→{dst_tool}降级已稳定{cnt}次")
 
-    return " | ".join(parts)
+    # 2b. 全局异常对比
+    global_anomaly = ""
+    try:
+        all_traces = load_traces(k=_MAX_TRACES)
+        if len(all_traces) > len(traces):
+            all_ok = sum(1 for t in all_traces if t.get("status") == "ok")
+            all_total = len(all_traces)
+            global_rate = (all_ok / all_total * 100) if all_total > 0 else 0
+            delta = success_rate - global_rate
+            if delta < -15:
+                global_anomaly = f"当前成功率明显低于全局（{global_rate:.0f}%），可能是任务难度偏高或工具不稳定"
+    except Exception:
+        pass
+
+    # 2c. 高失败率工具
+    risky_tools: List[str] = []
+    for name, total_cnt in tool_counts.most_common():
+        if total_cnt >= 2:
+            err_cnt = err_tool_counts.get(name, 0)
+            if err_cnt > 0 and err_cnt / total_cnt >= 0.3:
+                risky_tools.append(name)
+
+    # ── 3. 构建输出 ──
+    status_label = "稳定" if success_rate >= 90 else ("正常" if success_rate >= 70 else "波动")
+    parts.append(f"行为评估：{profile}，工具链{status_label}（{total}次调用）")
+
+    if fallback_lines:
+        parts.append("模式：" + "；".join(fallback_lines))
+
+    if risky_tools:
+        risky_desc = "、".join(risky_tools[:3])
+        alt_hint = _suggest_alternative(risky_tools[:2])
+        parts.append(f"注意：{risky_desc}失败率偏高。{alt_hint}")
+
+    if global_anomaly:
+        parts.append(global_anomaly)
+
+    if success_rate >= 95 and not risky_tools:
+        parts.append("无异常，继续当前策略。")
+
+    return "。".join(parts) + "。" if parts[-1].endswith("。") else "。".join(parts)
+
+
+def _suggest_alternative(risky_tools: List[str]) -> str:
+    """为高失败率工具生成替代建议。"""
+    alt_map = {
+        "skill_manage": "优先用patch直接编辑文件",
+        "skill_view": "用read_file直接读skill目录",
+        "execute_code": "用terminal替代简单脚本",
+        "terminal": "检查命令是否需要pty或timeout参数",
+        "write_file": "确认目标目录存在且可写",
+        "read_file": "确认文件存在后再读取",
+    }
+    hints = []
+    for t in risky_tools:
+        if t in alt_map:
+            hints.append(alt_map[t])
+    if hints:
+        return "；".join(hints[:2])
+    return "考虑降级到更稳健的替代工具"
 
 
 # ── XML 注入 ──
@@ -302,3 +396,24 @@ def _xml_escape(text: str) -> str:
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;"))
+
+
+def _suggest_for_error(error_type: str, tools: List[str]) -> str:
+    """根据错误类型生成可操作建议。
+
+    LLM 拿到这个建议后可以调整行为，无需额外推理。
+    """
+    tool_list = "、".join(tools[:3]) if tools else "工具"
+    suggestions = {
+        "timeout": f"{tool_list} 多次超时 → 考虑缩短 timeout 参数或分批处理",
+        "ConnectionError": f"{tool_list} 网络不稳定 → 优先用缓存或降级到本地方案",
+        "PermissionError": f"{tool_list} 权限不足 → 确认路径可写或使用 /tmp 替代",
+        "FileNotFoundError": f"{tool_list} 文件未找到 → 确认路径有效性后再调用",
+        "HTTPError": f"{tool_list} HTTP 请求失败 → 检查 URL 可达性，避免硬编码地址",
+        "RateLimitError": f"{tool_list} 被限流 → 降低调用频率，合并请求",
+        "JSONDecodeError": f"{tool_list} 返回格式异常 → 先验证响应完整性再解析",
+    }
+    for key, msg in suggestions.items():
+        if key.lower() in error_type.lower():
+            return msg
+    return f"{tool_list} 出错（{error_type}）→ 采用更鲁棒的替代方案"

@@ -1,10 +1,11 @@
 ---
 name: cogito-engine
-version: 1.6.0
+version: 1.6.2
 description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. MemOS 能力整合（四阶段）：α 价值评分引擎、[UNTRUSTED DATA] 安全包裹、决策指导 (Prefer/Avoid)、焦点序列检测、技能结晶引擎、工具调用采集。Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector, Alpha Scorer) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆, α评分, memos, 价值评分, 决策指导, 焦点序列, 技能结晶, 工具采集."
 ---
-
-# Cogito Engine v1.6.0
+# Cogito Engine v1.6.2
+> **v1.6.2 开发记录** — tool_insights 语义化加工 + 历史数据污染清理 + 结晶引擎防御加固 + 工具模式→结晶引擎接入。
+> **v1.6.0 更新** — MemOS 能力整合（四阶段）：α 价值评分 + [UNTRUSTED DATA] 安全包裹 + 决策指导 (Prefer/Avoid) + 焦点序列检测 + 技能结晶引擎 + 工具调用采集。详见 CHANGELOG。
 
 > **v1.6.0 更新** — MemOS 能力整合（四阶段）：α 价值评分 + [UNTRUSTED DATA] 安全包裹 + 决策指导 (Prefer/Avoid) + 焦点序列检测 + 技能结晶引擎 + 工具调用采集。详见 CHANGELOG。
 
@@ -602,3 +603,7 @@ All references are self-contained documents with independent YAML frontmatter. N
 ### External integration references
 
 - `references/homerail-voice-consciousness-integration.md` — Architecture analysis: integrating consciousness contour (P0-P5) with homerail's voice-first DAG orchestration for cross-agent identity continuity. Covers DAG node injection, runtime voice broadcasting via Voice Surface, and cross-DAG narrative persistence.
+
+### v1.6.2 工具模式→结晶引擎接入
+
+- `references/tool-pattern-crystallization.md` — 设计文档：将工具调用模式（高失败率/降级链/异常波动）接入结晶引擎产线。工具数据不再仅注入 LLM 为一次性提示，而是通过 `detect_tool_patterns()` 转化为 `CrystallizationCandidate` 持久化为跨会话技能。
