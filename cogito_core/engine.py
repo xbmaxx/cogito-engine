@@ -379,6 +379,7 @@ class CogitoEngine:
             except Exception:
                 pass
 
+
         # ── 5.5 心跳叙事（可选模块，v1.4 新增）──
         heartbeat_line = None
         heartbeat_mode = ""
@@ -758,12 +759,18 @@ class CogitoEngine:
         1. 高频话题（出现 ≥3 次）
         2. 反复出现的未解决问题（出现 ≥2 次）
 
+        结果在会话内缓存——跨 session 模式在一次对话中不变。
+
         Returns:
-            模式描述列表，如
-            ["你反复提到Cogito Engine——最近经常出现"]
+            模式描述列表
         """
+        # 会话级缓存：30 天叙事不变，每轮重算 6s+ 纯浪费
+        if hasattr(self, '_cached_cross_session_patterns'):
+            return self._cached_cross_session_patterns
+
         narratives = persistence.load_narrative_since(days=30)
         if len(narratives) < 3:
+            self._cached_cross_session_patterns = []
             return []
 
         # MemOS Phase 2: 使用焦点序列检测引擎
@@ -803,7 +810,9 @@ class CogitoEngine:
                 p.description for p in seq_patterns[:2]
             )
 
-        return all_patterns[:3]
+        result = all_patterns[:3]
+        self._cached_cross_session_patterns = result
+        return result
 
     # ── 信息设计：触发指令系统 ──
 
