@@ -676,19 +676,25 @@ class CogitoEngine:
         except Exception:
             pass
 
-        # 话题频次：从 cross_session_patterns 统计
+        # 话题频次：从 cross_session_patterns 统计（会话内缓存——叙事数据不变）
         topic_count = None
         try:
-            narratives = persistence.load_narrative_since(days=30)
-            if len(narratives) >= 5:
-                from collections import Counter
-                tc = Counter()
-                for n in narratives:
-                    for t in n.get("focus_topics", []):
-                        if t and len(str(t)) > 1:
-                            tc[str(t)] += 1
-                if tc:
-                    topic_count = tc.most_common(1)[0][1]
+            if not hasattr(self, '_cached_topic_count'):
+                narratives = persistence.load_narrative_since(days=30)
+                if len(narratives) >= 5:
+                    from collections import Counter
+                    tc = Counter()
+                    for n in narratives:
+                        for t in n.get("focus_topics", []):
+                            if t and len(str(t)) > 1:
+                                tc[str(t)] += 1
+                    if tc:
+                        self._cached_topic_count = tc.most_common(1)[0][1]
+                    else:
+                        self._cached_topic_count = None
+                else:
+                    self._cached_topic_count = None
+            topic_count = self._cached_topic_count
         except Exception:
             pass
 
@@ -1158,7 +1164,10 @@ class CogitoEngine:
 
         loc_data = {}
         try:
-            loc_data = get_location()
+            # 会话内缓存：IP 归属在同一次对话中不变
+            if not hasattr(self, '_cached_location'):
+                self._cached_location = get_location()
+            loc_data = self._cached_location
         except Exception:
             pass
         location = loc_data.get("city", "") if is_first else ""
