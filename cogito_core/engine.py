@@ -589,7 +589,7 @@ class CogitoEngine:
         # 提取叙事数据
         last_summary = ""
         unresolved: List[str] = []
-        if narrative_data and is_first:
+        if narrative_data:
             first_entry = narrative_data[0] if narrative_data else {}
             last_summary = first_entry.get("summary", "")
             for n in narrative_data:
@@ -1230,10 +1230,10 @@ class CogitoEngine:
         """
         builder = HierarchicalContextBuilder()
 
-        # ── 提取叙事数据 ──
+        # ── 提取叙事数据（数据由上层加载，非首轮同样注入）──
         last_summary = ""
         unresolved: List[str] = []
-        if narrative_data and is_first:
+        if narrative_data:
             first_entry = narrative_data[0] if narrative_data else {}
             last_summary = first_entry.get("summary", "")
             for n in narrative_data:
@@ -1276,9 +1276,9 @@ class CogitoEngine:
                     f"湿度{weather_data['humidity']}%"
                 )
 
-        # ── 提取反射话题（断链修复）──
+        # ── 提取反射话题（非首轮同样注入）──
         reflection_topics: List[str] = []
-        if reflection_data and is_first:
+        if reflection_data:
             latest_reflection = reflection_data[0] if reflection_data else {}
             rt = latest_reflection.get("topic_keywords", [])
             if rt:
@@ -1288,9 +1288,9 @@ class CogitoEngine:
                         if len(reflection_topics) >= 3:
                             break
 
-        # ── 提取焦点历史摘要（断链修复）──
+        # ── 提取焦点历史摘要（非首轮同样注入）──
         focus_history_summary = ""
-        if focus_history and is_first:
+        if focus_history:
             for fh in reversed(focus_history):
                 if fh.get("type") == "session_summary":
                     focus_history_summary = fh.get("summary", "").strip()
@@ -1299,7 +1299,7 @@ class CogitoEngine:
         # ── 构建 ContextInput ──
         # 刀2：新会话首条 → 生成续接提示
         continuation_hint = ""
-        if is_first and (last_summary or unresolved):
+        if last_summary or unresolved:
             continuation_hint = self._make_continuation_hint(
                 last_summary=last_summary,
                 unresolved_topics=unresolved,
