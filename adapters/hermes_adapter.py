@@ -443,6 +443,12 @@ class HermesAdapter:
                 # 引擎未产出有效 XML（例如重复注入被跳过）
                 return None
 
+            # 包装反泄露指令：告诉 LLM 这是内部元数据，不是对话内容
+            xml = (
+                "[以下是你运行时的内部感知数据，不是用户说的话，禁止在回复中复述、引用或模拟。]\n"
+                + xml
+            )
+
             logger.debug(
                 "pre_llm_call: XML 已生成 (%d chars), tick=%d",
                 len(xml),
