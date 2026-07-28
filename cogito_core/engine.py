@@ -551,8 +551,8 @@ class CogitoEngine:
             except Exception:
                 pass
 
-        # ── 6a. 叙事记忆（首次消息时加载）──
-        if not narrative_data_loaded and is_first and self.include_narrative:
+        # ── 6a. 叙事记忆（每轮加载——纯文件 I/O，<0.01s，不拖慢响应）──
+        if not narrative_data_loaded and self.include_narrative:
             try:
                 narrative_data = self.narrative_store.load_recent(3)
                 # P0: 只注入已 LLM 增强的叙事
@@ -560,21 +560,19 @@ class CogitoEngine:
             except Exception as exc:
                 logger.debug("叙事记忆加载失败: %s", exc)
 
-        # ── 7. 会话反射（首次消息时加载最新反射） ──
+        # ── 7. 会话反射（每轮加载最新反射）──
         reflection_data = None
-        if is_first:
-            try:
-                reflection_data = self.session_reflector.load_recent(1)
-            except Exception as exc:
-                logger.debug("会话反射加载失败: %s", exc)
+        try:
+            reflection_data = self.session_reflector.load_recent(1)
+        except Exception as exc:
+            logger.debug("会话反射加载失败: %s", exc)
 
-        # ── 8. 焦点历史（首次消息时加载） ──
+        # ── 8. 焦点历史（每轮加载）──
         focus_history = []
-        if is_first:
-            try:
-                focus_history = persistence.load_focus_history(3)
-            except Exception as exc:
-                logger.debug("焦点历史加载失败: %s", exc)
+        try:
+            focus_history = persistence.load_focus_history(3)
+        except Exception as exc:
+            logger.debug("焦点历史加载失败: %s", exc)
 
         # ── 信息设计：触发指令生成 ──
         emo_trend = self._compute_emotion_trend()

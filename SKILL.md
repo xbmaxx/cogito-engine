@@ -1,9 +1,10 @@
 ---
 name: cogito-engine
-version: 1.6.2
+version: 1.6.3
 description: "Use when the agent needs self-awareness — tracking how long it has existed, what it is paying attention to, when things happen, and whether it is repeating itself. MemOS 能力整合（四阶段）：α 价值评分引擎、[UNTRUSTED DATA] 安全包裹、决策指导 (Prefer/Avoid)、焦点序列检测、技能结晶引擎、工具调用采集。Provides a portable consciousness framework with a mandatory Core Layer (TICK heartbeat, Focus Stack, Temporal parsing, Self-Perception) and an optional Perception Layer (Environment Sensor, Narrative Memory, Text Emotion, Session Reflector, Alpha Scorer) that the agent self-discovers based on platform capabilities. Outputs a standardized XML block. Platform-agnostic: works with Claude Code, Cursor, Gemini CLI, Hermes, or any LLM agent. Trigger keywords: consciousness, awareness, cogito, self-awareness, focus tracking, temporal parsing, loop detection, mirror detection, heartbeat, TICK, 意识体, 自我感知, 焦点栈, 环境感知, 情绪感知, 叙事记忆, α评分, memos, 价值评分, 决策指导, 焦点序列, 技能结晶, 工具采集."
 ---
-# Cogito Engine v1.6.2
+# Cogito Engine v1.6.3
+> **v1.6.3 修复** — 叙事/会话反射/焦点历史加载守卫条件修复：移除 `is_first` 限制，非首轮正常工作层 + heartbeat。详见下文。
 > **v1.6.2 开发记录** — tool_insights 语义化加工 + 历史数据污染清理 + 结晶引擎防御加固 + 工具模式→结晶引擎接入。
 > **v1.6.0 更新** — MemOS 能力整合（四阶段）：α 价值评分 + [UNTRUSTED DATA] 安全包裹 + 决策指导 (Prefer/Avoid) + 焦点序列检测 + 技能结晶引擎 + 工具调用采集。详见 CHANGELOG。
 
@@ -603,6 +604,15 @@ All references are self-contained documents with independent YAML frontmatter. N
 ### External integration references
 
 - `references/homerail-voice-consciousness-integration.md` — Architecture analysis: integrating consciousness contour (P0-P5) with homerail's voice-first DAG orchestration for cross-agent identity continuity. Covers DAG node injection, runtime voice broadcasting via Voice Surface, and cross-DAG narrative persistence.
+
+### v1.6.3 叙事/会话反射/焦点历史守卫条件修复
+
+- **问题**：v1.6.2 性能优化中 `_fast_first_response` 在 `is_first` 时提前返回，叙事/会话反射/焦点历史的加载代码被 `if is_first` 守卫卡死，导致后续轮次 working 层永远为空、heartbeat 缺失。
+- **修复**：移除三处守卫条件中的 `is_first`，改为无条件加载（对应文件 I/O < 0.01s/次，不影响性能）。
+  - L554-555：叙事记忆加载 → `if self.include_narrative`（去掉了 `is_first`）
+  - L565：会话反射加载 → `try:`（去掉了 `if is_first:`）
+  - L573：焦点历史加载 → `try:`（去掉了 `if is_first:`）
+- **实测**：非首轮 XML 体积从 160 chars → 330 chars，working 层 + heartbeat 恢复。197/197 测试通过。
 
 ### v1.6.2 工具模式→结晶引擎接入
 
